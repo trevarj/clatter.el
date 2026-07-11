@@ -324,7 +324,11 @@ SERVER-TIME overrides the current time for the timestamp."
   (let* ((nick-face (clatter-hl-nick-face sender conn))
          (my-nick (clatter-connection-nick conn))
          (is-reply-to-me (get-text-property 0 'clatter-reply-to-me text))
-         (is-mention (and my-nick
+         ;; Server buffers collect notices and service traffic, which may
+         ;; legitimately contain our nick but are not chat mentions.
+         (is-mention (and (not (eq (buffer-local-value 'clatter--buffer-type buffer)
+                                   'server))
+                          my-nick
                           ;; do not highlight self-mentions
                           (not (string-equal-ignore-case sender my-nick))
                           (or is-reply-to-me

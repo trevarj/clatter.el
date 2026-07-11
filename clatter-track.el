@@ -33,8 +33,19 @@ Valid values: before-modes, after-modes, end."
   :group 'clatter)
 
 (defcustom clatter-track-muted-channels nil
-  "List of channel names to exclude from activity tracking.
+  "List of channel names to dim in the activity tracker.
+Muted channels remain visible in the tracker, using
+`clatter-track-muted'.  Use `clatter-track-exclude-targets' to hide
+targets completely.
 Example: (\"#spam\" \"#bots\")"
+  :type '(repeat string)
+  :group 'clatter)
+
+(defcustom clatter-track-exclude-targets nil
+  "List of targets to hide completely from the activity tracker.
+Excluded targets do not appear in the mode-line indicator, activity list,
+activity switch command, or Consult activity source.  Target names use the
+same spelling as `clatter--target', for example \"*server*\" or \"#spam\"."
   :type '(repeat string)
   :group 'clatter)
 
@@ -112,6 +123,7 @@ Plist keys: :buffer :name :unread :mention :muted :dm"
     (with-current-buffer buf
       (when (and (derived-mode-p 'clatter-mode)
                  clatter--target
+                 (not (member clatter--target clatter-track-exclude-targets))
                  (> clatter--unread-count 0))
         (let* ((target clatter--target)
                (is-channel (and target (string-match-p "^[#&!+]" target)))
