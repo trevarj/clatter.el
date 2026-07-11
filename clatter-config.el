@@ -341,6 +341,19 @@ prompt so the character is entered there."
   :type 'boolean
   :group 'clatter)
 
+(defcustom clatter-prompt-format "%t> "
+  "Format used for the input prompt in Clatter buffers.
+
+The value may be a string or a function.  In a string, `%t' expands to
+the buffer target, `%n' to the current nickname, `%N' to the network
+name, and `%%' to a literal percent sign.  A function is called with
+one argument, the Clatter buffer, and must return a string.
+
+The default preserves Clatter's historical `target> ' prompt."
+  :type '(choice (string :tag "Format string")
+                 (function :tag "Function"))
+  :group 'clatter)
+
 (defcustom clatter-buffer-max-lines 10000
   "Maximum number of lines to keep in a clatter buffer.
 When exceeded, oldest messages are removed.

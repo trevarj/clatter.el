@@ -587,6 +587,62 @@ identical messages sent close together each reconcile only one local line."
 
 ;; --- Input prompt ---
 
+(defun clatter--prompt-string (&optional buffer)
+  "Return the configured prompt string for BUFFER.
+When BUFFER is nil, use the current buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (let* ((target (or clatter--target "clatter"))
+           (network (or clatter--network ""))
+           (conn (and clatter--network
+                      (clatter-get-connection clatter--network)))
+           (nick (if conn (or (clatter-connection-nick conn) "") ""))
+           (format-spec `((?t . ,target) (?n . ,nick) (?N . ,network)
+                          (?% . "%"))))
+      (cond
+       ((stringp clatter-prompt-format)
+        (format-spec clatter-prompt-format format-spec))
+       ((functionp clatter-prompt-format)
+        (let ((result (funcall clatter-prompt-format (current-buffer))))
+          (unless (stringp result)
+            (error "`clatter-prompt-format' function must return a string"))
+          result))
+       (t (error "Invalid `clatter-prompt-format': %S" clatter-prompt-format))))))
+
+(defun clatter--prompt-format-needs-nick-p ()
+  "Return non-nil if `clatter-prompt-format' may depend on the current nick."
+  (or (functionp clatter-prompt-format)
+      (and (stringp clatter-prompt-format)
+           (string-match-p "\\(?:^\\|[^%]\\)\\(?:%%\\)*%n"
+                           clatter-prompt-format))))
+
+(defun clatter--propertized-prompt (&optional buffer)
+  "Return the read-only, propertized prompt for BUFFER."
+  (propertize (clatter--prompt-string buffer)
+              'face 'clatter-prompt
+              'read-only t
+              'front-sticky t
+              'rear-nonsticky t))
+
+(defun clatter--refresh-prompt ()
+  "Refresh the current buffer's prompt without losing pending input."
+  (when (and clatter--prompt-marker clatter--input-marker)
+    (let* ((input (clatter--get-input))
+           (point-in-input (and (>= (point) (marker-position clatter--input-marker))
+                                (<= (point) (clatter--input-end))))
+           (input-offset (and point-in-input
+                              (- (point) (marker-position clatter--input-marker))))
+           (inhibit-read-only t))
+      (save-excursion
+        (goto-char clatter--prompt-marker)
+        (delete-region clatter--prompt-marker clatter--input-marker)
+        (insert (clatter--propertized-prompt))
+        (set-marker clatter--input-marker (point)))
+      ;; INPUT remains after the newly inserted prompt.  Restore point in it
+      ;; so a nick change cannot disrupt someone composing a message.
+      (when point-in-input
+        (goto-char (+ (marker-position clatter--input-marker)
+                      (min input-offset (length input))))))))
+
 (defun clatter--setup-prompt (buffer)
   "Set up the input prompt in BUFFER.
 For `newest-first' the prompt sits at the top with messages below it.
@@ -595,11 +651,7 @@ conventional IRC client, with messages accumulating above it."
   (with-current-buffer buffer
     (let ((inhibit-read-only t)
           (buffer-undo-list t)
-          (prompt (propertize (concat (or clatter--target "clatter") "> ")
-                              'face 'clatter-prompt
-                              'read-only t
-                              'front-sticky t
-                              'rear-nonsticky t)))
+          (prompt (clatter--propertized-prompt buffer)))
       (clatter-input-ring-setup)
       (if (eq clatter-message-order 'oldest-first)
           ;; Bottom prompt: [messages...] then prompt+input on the last line.
@@ -1071,7 +1123,15 @@ the buffer margin-width variables."
                                             (listp (buffer-local-value 'buffer-invisibility-spec buf))
                                             (memq 'noise (buffer-local-value 'buffer-invisibility-spec buf))
                                             (clatter-smart-eval buf old-nick new-nick)
-                                            '(noise))))))))
+                                            '(noise))))))
+    ;; The handler has already updated CONN's nick.  Refresh every prompt on
+    ;; this network only when this was our own nick change and the configured
+    ;; prompt may depend on the nick.
+    (when (string-equal-ignore-case new-nick my-nick)
+      (dolist (buf (clatter-all-buffers network))
+        (with-current-buffer buf
+          (when (clatter--prompt-format-needs-nick-p)
+            (clatter--refresh-prompt)))))))
 
 (defun clatter-ui--on-topic (conn channel sender topic at)
   "Show TOPIC for CHANNEL set by SENDER at AT on CONN."

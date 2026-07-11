@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'test-helper)
 (require 'clatter-ui)
 
 (defmacro clatter-input-test--with (order &rest body)
@@ -31,6 +32,106 @@
   (save-excursion
     (goto-char (point-min))
     (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+
+(ert-deftest clatter-prompt-format-expands-placeholders ()
+  "String prompt formats expand target, nick, network, and percent."
+  (let ((clatter-prompt-format "%N/%n:%t %% "))
+    (with-temp-buffer
+      (clatter-mode)
+      (setq-local clatter--network "testnet")
+      (setq-local clatter--target "#test")
+      (let ((conn (clatter-test-make-connection "testnet" "alice")))
+        (unwind-protect
+            (progn
+              (clatter--setup-prompt (current-buffer))
+              (should (string-prefix-p "testnet/alice:#test % " (buffer-string))))
+          (remhash (clatter-connection-network-id conn) clatter-connections))))))
+
+(ert-deftest clatter-prompt-format-function-receives-context ()
+  "Function prompt formats receive the Clatter buffer."
+  (let ((clatter-prompt-format
+         (lambda (buffer)
+           (with-current-buffer buffer
+             (let ((conn (clatter-get-connection clatter--network)))
+               (format "%s@%s/%s>"
+                       (clatter-connection-nick conn)
+                       clatter--network
+                       clatter--target))))))
+    (with-temp-buffer
+      (clatter-mode)
+      (setq-local clatter--network "testnet")
+      (setq-local clatter--target "#test")
+      (let ((conn (clatter-test-make-connection "testnet" "alice")))
+        (unwind-protect
+            (progn
+              (clatter--setup-prompt (current-buffer))
+              (should (string-prefix-p "alice@testnet/#test>" (buffer-string))))
+          (remhash (clatter-connection-network-id conn) clatter-connections))))))
+
+(ert-deftest clatter-prompt-format-needs-nick-detects-unescaped-specifier ()
+  "Nick prompt detection ignores literal percent escapes."
+  (let ((clatter-prompt-format "%n> "))
+    (should (clatter--prompt-format-needs-nick-p)))
+  (let ((clatter-prompt-format "%t %%n> "))
+    (should-not (clatter--prompt-format-needs-nick-p)))
+  (let ((clatter-prompt-format (lambda (_buffer) "prompt> ")))
+    (should (clatter--prompt-format-needs-nick-p))))
+
+(ert-deftest clatter-prompt-refresh-preserves-pending-input ()
+  "Refreshing a nick-based prompt retains typed input and input point."
+  (let ((clatter-prompt-format "%n> "))
+    (with-temp-buffer
+      (clatter-mode)
+      (setq-local clatter--network "testnet")
+      (setq-local clatter--target "#test")
+      (let ((conn (clatter-test-make-connection "testnet" "alice")))
+        (unwind-protect
+            (progn
+              (clatter--setup-prompt (current-buffer))
+              (goto-char (clatter--input-end))
+              (insert "draft")
+              (goto-char (+ (marker-position clatter--input-marker) 2))
+              (setf (clatter-connection-nick conn) "bob")
+              (clatter--refresh-prompt)
+              (should (string-prefix-p "bob> draft" (buffer-string)))
+              (should (equal (clatter--get-input) "draft"))
+              (should (= (point) (+ (marker-position clatter--input-marker) 2))))
+          (remhash (clatter-connection-network-id conn) clatter-connections))))))
+
+(ert-deftest clatter-prompt-nick-hook-refreshes-nick-prompts-only ()
+  "Own nick changes refresh nick prompts and preserve other prompt formats."
+  (let ((conn (clatter-test-make-connection "testnet" "alice"))
+        nick-buffer
+        target-buffer)
+    (unwind-protect
+        (progn
+          (setq nick-buffer (clatter-get-or-create-buffer "testnet" "#nick" 'channel))
+          (with-current-buffer nick-buffer
+            (setq-local clatter-prompt-format "%n> ")
+            (clatter--setup-prompt nick-buffer)
+            (goto-char (clatter--input-end))
+            (insert "draft"))
+          (setq target-buffer (clatter-get-or-create-buffer "testnet" "#target" 'channel))
+          (with-current-buffer target-buffer
+            (setq-local clatter-prompt-format "%t> ")
+            (clatter--setup-prompt target-buffer)
+            (should (string-prefix-p "#target> " (buffer-string))))
+          (setf (clatter-connection-nick conn) "bob")
+          (clatter-ui--on-nick conn (clatter-parse-prefix "alice!u@h") "bob")
+          (with-current-buffer nick-buffer
+            (should (string-prefix-p "bob> draft" (buffer-string)))
+            (should (equal (clatter--get-input) "draft")))
+          (with-current-buffer target-buffer
+            (should (string-prefix-p "#target> " (buffer-string)))))
+      (when nick-buffer
+        (clatter-remove-buffer "testnet" "#nick")
+        (when (buffer-live-p nick-buffer)
+          (kill-buffer nick-buffer)))
+      (when target-buffer
+        (clatter-remove-buffer "testnet" "#target")
+        (when (buffer-live-p target-buffer)
+          (kill-buffer target-buffer)))
+      (remhash (clatter-connection-network-id conn) clatter-connections))))
 
 (ert-deftest clatter-input-oldest-first-prompt-at-bottom ()
   "Oldest-first: prompt is on the last line; messages accumulate above it."
