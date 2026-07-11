@@ -259,6 +259,48 @@
 
 ;; --- Timestamp margins ---
 
+(defun clatter-test--timestamp-overlay-count ()
+  "Return the number of message timestamp overlays in the current buffer."
+  (cl-count-if (lambda (overlay) (overlay-get overlay 'clatter-timestamp))
+               (overlays-in (point-min) (point-max))))
+
+(ert-deftest clatter-test-timestamps-only-if-changed-coalesces-formatted-values ()
+  "Repeated formatted timestamps use one margin timestamp when enabled."
+  (let ((clatter-timestamp-only-if-changed t)
+        (clatter-timestamp-format "%H:%M")
+        (clatter-timestamp-side 'right)
+        (first (encode-time 30 12 10 1 1 2026))
+        (same-minute (encode-time 59 12 10 1 1 2026))
+        (next-minute (encode-time 0 13 10 1 1 2026)))
+    (with-temp-buffer
+      (clatter--insert-message (current-buffer) "first" nil nil first)
+      (clatter--insert-message (current-buffer) "same minute" nil nil same-minute)
+      (clatter--insert-message (current-buffer) "next minute" nil nil next-minute)
+      (should (= (clatter-test--timestamp-overlay-count) 2)))))
+
+(ert-deftest clatter-test-timestamps-only-if-changed-is-buffer-local ()
+  "Timestamp suppression does not carry over to another buffer."
+  (let ((clatter-timestamp-only-if-changed t)
+        (clatter-timestamp-format "%H:%M")
+        (time (encode-time 30 12 10 1 1 2026)))
+    (with-temp-buffer
+      (clatter--insert-message (current-buffer) "first" nil nil time)
+      (clatter--insert-message (current-buffer) "same buffer" nil nil time)
+      (should (= (clatter-test--timestamp-overlay-count) 1)))
+    (with-temp-buffer
+      (clatter--insert-message (current-buffer) "other buffer" nil nil time)
+      (should (= (clatter-test--timestamp-overlay-count) 1)))))
+
+(ert-deftest clatter-test-timestamps-only-if-changed-default-keeps-every-timestamp ()
+  "The default preserves the current per-message timestamp behavior."
+  (let ((clatter-timestamp-only-if-changed nil)
+        (clatter-timestamp-format "%H:%M")
+        (time (encode-time 30 12 10 1 1 2026)))
+    (with-temp-buffer
+      (clatter--insert-message (current-buffer) "first" nil nil time)
+      (clatter--insert-message (current-buffer) "second" nil nil time)
+      (should (= (clatter-test--timestamp-overlay-count) 2)))))
+
 (ert-deftest clatter-test-timestamp-side-left-margin ()
   "Left timestamp side configures the left margin."
   (let ((clatter-timestamp-side 'left)

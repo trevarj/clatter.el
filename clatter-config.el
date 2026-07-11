@@ -120,6 +120,15 @@ See `format-time-string' for format specifiers."
   :type 'string
   :group 'clatter)
 
+(defcustom clatter-timestamp-only-if-changed nil
+  "Display a message timestamp only when its formatted value changes.
+
+When non-nil, consecutive messages in the same buffer whose timestamps
+format to the same string share a single displayed timestamp.  The
+comparison is local to each Clatter buffer."
+  :type 'boolean
+  :group 'clatter)
+
 (defcustom clatter-display-on-join t
   "Whether to display a channel buffer when you join it.
 

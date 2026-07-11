@@ -24,6 +24,9 @@
 
 ;; --- Faces ---
 
+(defvar-local clatter--last-formatted-timestamp nil
+  "Last formatted message timestamp in the current Clatter buffer.")
+
 (defface clatter-timestamp
   '((t :foreground "#7c7c7c"))
   "Face for message timestamps."
@@ -214,11 +217,22 @@ append at the bottom like a traditional IRC client."
             ;; the layout: below a top prompt for `newest-first', or above a
             ;; bottom prompt for `oldest-first'.
             (goto-char (or clatter--messages-marker (point-max)))
-            (let* ((ts-str (unless no-timestamp
-                             (format-time-string clatter-timestamp-format time)))
+            (let* ((formatted-timestamp
+                    (unless no-timestamp
+                      (format-time-string clatter-timestamp-format time)))
+                   (ts-str (and formatted-timestamp
+                                (or (not clatter-timestamp-only-if-changed)
+                                    (not (equal formatted-timestamp
+                                                clatter--last-formatted-timestamp)))
+                                formatted-timestamp))
                    (wrap-col (1+ clatter-nick-column-width))
                    (wrap-prefix (make-string wrap-col ?\s))
                    (start (point)))
+              ;; Remember the formatted value, rather than the raw time, so
+              ;; formats without seconds coalesce correctly and each buffer
+              ;; keeps its own timestamp run.
+              (when formatted-timestamp
+                (setq clatter--last-formatted-timestamp formatted-timestamp))
               (insert text "\n")
               (when (and clatter-fill-column
                          (> clatter-fill-column wrap-col))
