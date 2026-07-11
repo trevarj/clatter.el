@@ -763,6 +763,11 @@ If the input contains multiple lines and exceeds
     ;; Use a fresh copy so per-buffer /suppress and /unsuppress edits
     ;; never mutate the shared clatter-suppress-messages list.
     (setq buffer-invisibility-spec (copy-sequence clatter-suppress-messages))
+    ;; Smart filtering uses the `noise' category.  Seed it automatically
+    ;; only when smart filtering is enabled and has message types to filter;
+    ;; an explicitly configured `noise' suppression remains untouched.
+    (when (and clatter-smart-enabled clatter-smart-noise)
+      (add-to-invisibility-spec 'noise))
     (unless clatter-fools-visible
       (add-to-invisibility-spec 'clatter-fool))
     (clatter--setup-prompt buffer)

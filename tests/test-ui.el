@@ -305,6 +305,70 @@
 
 ;; --- Fool visibility ---
 
+;; --- Smart noise visibility ---
+
+(ert-deftest clatter-test-smart-noise-seeds-new-buffer-by-default ()
+  "New clatter buffers hide smart-filtered noise by default."
+  (let ((clatter-smart-enabled t)
+        (clatter-smart-noise '(join)))
+    (with-temp-buffer
+      (clatter-mode)
+      (clatter-ui-setup-buffer (current-buffer))
+      (should (memq 'noise buffer-invisibility-spec)))))
+
+(ert-deftest clatter-test-smart-noise-disabled-does-not-seed-new-buffer ()
+  "Disabling smart noise leaves the automatic category out of new buffers."
+  (let ((clatter-smart-enabled nil)
+        (clatter-smart-noise '(join))
+        (clatter-suppress-messages '(muted)))
+    (with-temp-buffer
+      (clatter-mode)
+      (clatter-ui-setup-buffer (current-buffer))
+      (should-not (memq 'noise buffer-invisibility-spec)))))
+
+(ert-deftest clatter-test-empty-smart-noise-does-not-seed-new-buffer ()
+  "No automatic category is added when no message types are smart-filtered."
+  (let ((clatter-smart-enabled t)
+        (clatter-smart-noise nil)
+        (clatter-suppress-messages '(muted)))
+    (with-temp-buffer
+      (clatter-mode)
+      (clatter-ui-setup-buffer (current-buffer))
+      (should-not (memq 'noise buffer-invisibility-spec)))))
+
+(ert-deftest clatter-test-explicit-noise-suppression-is-preserved ()
+  "Global noise suppression remains effective when smart noise is disabled."
+  (let ((clatter-smart-enabled nil)
+        (clatter-smart-noise nil)
+        (clatter-suppress-messages '(muted noise)))
+    (with-temp-buffer
+      (clatter-mode)
+      (clatter-ui-setup-buffer (current-buffer))
+      (should (memq 'noise buffer-invisibility-spec)))))
+
+(ert-deftest clatter-test-smart-noise-tags-noisy-events-in-new-buffer ()
+  "A smart-filtered event in a new buffer carries the hidden noise category."
+  (let ((clatter-smart-enabled t)
+        (clatter-smart-noise '(join))
+        (clatter--buffer-alist nil)
+        (conn (clatter-test-make-connection)))
+    (unwind-protect
+          (cl-letf (((symbol-function 'clatter-smart-eval)
+                   (lambda (&rest _args) t)))
+          (clatter-ui--on-join conn '("noisy" nil nil) "#test" nil nil)
+          (let ((buffer (clatter-get-buffer "testnet" "#test")))
+            (should buffer)
+            (with-current-buffer buffer
+              (should (memq 'noise buffer-invisibility-spec))
+              (goto-char (point-min))
+              (search-forward "noisy has joined")
+              (should (memq 'noise
+                            (ensure-list (get-text-property (match-beginning 0) 'invisible)))))))
+      (dolist (buffer (clatter-all-buffers))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))
+      (clatter-test-cleanup))))
+
 (ert-deftest clatter-test-fool-message-gets-dim-face ()
   "Messages with the fool invisibility category get `clatter-fool'."
   (with-temp-buffer

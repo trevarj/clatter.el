@@ -25,6 +25,15 @@
                          (const :tag "AWAY" away)))
   :group 'clatter)
 
+(defcustom clatter-smart-enabled t
+  "When non-nil, hide smart-filtered noise in newly created buffers.
+
+This adds the `noise' invisibility category to new clatter buffers when
+`clatter-smart-noise' is non-nil.  Explicit `clatter-suppress-messages'
+settings continue to be honored independently."
+  :type 'boolean
+  :group 'clatter)
+
 (defcustom clatter-smart-threshold 0.5
   "SNR threshold under which noisy message types are hidden."
   :type 'number
