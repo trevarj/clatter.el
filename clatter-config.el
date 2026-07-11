@@ -39,6 +39,8 @@ Each entry is a list of (NAME . PLIST) where PLIST contains:
   :client-cert - Path to client certificate for SASL EXTERNAL
   :autojoin  - List of channels to join on connect
   :password  - Server password (or use auth-source)
+  :bouncer   - This connection is to a bouncer which manages upstream
+               NickServ identity and nick reclaim
   :proxy     - SOCKS5 proxy plist (:type socks5 :host H :port P
                [:user U] [:pass P]); see `clatter-proxy'
   :tor       - When non-nil, shorthand for Tor's local SOCKS5
@@ -173,6 +175,15 @@ Matches ERC default."
 (defcustom clatter-use-auth-source t
   "Use `auth-source' to look up passwords.
 Passwords are looked up by :host (server) and :user (nick)."
+  :type 'boolean
+  :group 'clatter)
+
+(defcustom clatter-auto-identify t
+  "Whether to automatically identify with NickServ after registration.
+When non-nil, clatter preserves its historical behavior of sending
+`IDENTIFY' with the configured server password after connecting without
+SASL.  A network marked with `:bouncer t' always skips this step: its
+password authenticates this client to the bouncer, not to NickServ."
   :type 'boolean
   :group 'clatter)
 

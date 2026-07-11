@@ -24,6 +24,8 @@
 (cl-defstruct (clatter-connection (:constructor clatter-connection--create))
   "An IRC network connection."
   network-id           ; string: network name from config
+  config               ; effective plist, including `clatter-connect' overrides
+  connect-overrides    ; original keyword overrides for reconnecting
   process              ; network process
   state                ; :disconnected :connecting :registering :connected
   nick                 ; current nickname
@@ -328,7 +330,7 @@ network configuration."
   "Connect to IRC network NETWORK-ID.
 ARGS are keyword arguments that override `clatter-networks' config:
   :server :port :tls :nick :username :realname :sasl :client-cert
-  :autojoin :password"
+  :autojoin :password :bouncer"
   (interactive
    (list (completing-read "Network: "
                           (mapcar #'car clatter-networks))))
@@ -366,6 +368,8 @@ ARGS are keyword arguments that override `clatter-networks' config:
     (let ((conn (or (clatter-get-connection network-id)
                     (let ((new-conn (clatter-connection--create
                                      :network-id network-id
+                                     :config config
+                                     :connect-overrides args
                                      :state :disconnected
                                      :nick nick
                                      :reconnect-enabled t
@@ -386,6 +390,11 @@ ARGS are keyword arguments that override `clatter-networks' config:
         (setf (clatter-connection-reconnect-timer conn) nil))
 
       (setf (clatter-connection-state conn) :connecting)
+      ;; Keep the resolved config after the process is gone so reconnects
+      ;; retain temporary `clatter-connect' keyword overrides (notably
+      ;; `:bouncer').
+      (setf (clatter-connection-config conn) config)
+      (setf (clatter-connection-connect-overrides conn) args)
       (setf (clatter-connection-nick conn) nick)
       (setf (clatter-connection-desired-nick conn) nick)
       (setf (clatter-connection-recv-buffer conn) (decode-coding-string "" 'utf-8))
@@ -556,7 +565,8 @@ avoid an immediate re-collision and another kill."
            (delay (if recent-regain-kill
                       (max delay clatter-regain-kill-backoff)
                     delay))
-           (network-id (clatter-connection-network-id conn)))
+           (network-id (clatter-connection-network-id conn))
+           (overrides (clatter-connection-connect-overrides conn)))
       (when recent-regain-kill
         (clatter--watchdog "RECONNECT-BACKOFF %s regain-kill-count=%d delay=%ds"
                            network-id
@@ -570,7 +580,7 @@ avoid an immediate re-collision and another kill."
             (run-at-time delay nil
                          (lambda ()
                            (setf (clatter-connection-reconnect-timer conn) nil)
-                           (clatter-connect network-id)))))))
+                           (apply #'clatter-connect network-id overrides)))))))
 
 ;; --- Health Monitoring ---
 

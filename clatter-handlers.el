@@ -271,10 +271,21 @@ Return the trimmed character."
                           (setf (clatter-connection-reconnect-attempts this-conn) 0)
                           (setf (clatter-connection-regain-kill-count this-conn) 0)
                           (setf (clatter-connection-regain-kill-time this-conn) nil)))))
-       (let ((config (process-get (clatter-connection-process conn) :clatter-config)))
+       (let* ((process (clatter-connection-process conn))
+              ;; The process plist contains keyword overrides supplied to
+              ;; `clatter-connect'.  Fall back to the saved network config
+              ;; for tests and for connections predating that plist.
+              (config (or (and process
+                               (process-get process :clatter-config))
+                          (cdr (assoc (clatter-connection-network-id conn)
+                                      clatter-networks #'equal))))
+              (bouncer-p (plist-get config :bouncer)))
          ;; NickServ identify if not using SASL
-         (let ((password (clatter-get-password (clatter-connection-network-id conn))))
-           (when (and password
+         (let ((password (clatter-get-password
+                          (clatter-connection-network-id conn) config)))
+           (when (and clatter-auto-identify
+                      (not bouncer-p)
+                      password
                       (not (eq (clatter-connection-sasl-state conn) :done)))
              (clatter-send conn (clatter-irc-privmsg
                                  "NickServ"
@@ -830,6 +841,16 @@ MSGID, SERVER-TIME, IS-BOT, REPLY-TO, and IS-REPLY-TO-ME."
 (defvar clatter-nick-reclaim-max-attempts 40
   "Max nick reclaim attempts before giving up (10 minutes at 15s interval).")
 
+(defun clatter--connection-bouncer-p (conn)
+  "Return non-nil when CONN uses a bouncer-managed upstream session.
+The live process config takes precedence over the saved network entry so
+temporary `clatter-connect' keyword overrides are honored."
+  (let* ((process (clatter-connection-process conn))
+         (config (or (and process (process-get process :clatter-config))
+                     (cdr (assoc (clatter-connection-network-id conn)
+                                 clatter-networks #'equal)))))
+    (plist-get config :bouncer)))
+
 (defun clatter--maybe-start-nick-reclaim (conn)
   "Start a nick reclaim timer on CONN if current nick differs from desired."
   ;; Cancel any existing reclaim timer
@@ -839,6 +860,7 @@ MSGID, SERVER-TIME, IS-BOT, REPLY-TO, and IS-REPLY-TO-ME."
   (let ((desired (clatter-connection-desired-nick conn))
         (current (clatter-connection-nick conn)))
     (when (and clatter-nick-reclaim-enabled
+               (not (clatter--connection-bouncer-p conn))
                desired current
                (not (string-equal current desired)))
       ;; Start periodic reclaim attempts.  The first attempt is delayed
@@ -875,14 +897,15 @@ MSGID, SERVER-TIME, IS-BOT, REPLY-TO, and IS-REPLY-TO-ME."
 When SASL-identified and `clatter-nick-reclaim-use-regain' is set, use
 NickServ REGAIN so services hand us the nick as the authenticated owner
 \(cooperating with ENFORCE).  Otherwise fall back to a bare NICK."
-  (if (and clatter-nick-reclaim-use-regain
+  (unless (clatter--connection-bouncer-p conn)
+    (if (and clatter-nick-reclaim-use-regain
            (eq (clatter-connection-sasl-state conn) :done))
-      (progn
-        (clatter--watchdog "RECLAIM-REGAIN %s nick=%s"
-                           (clatter-connection-network-id conn) desired)
-        (clatter-send conn (clatter-irc-privmsg
-                            "NickServ" (format "REGAIN %s" desired))))
-    (clatter-send conn (clatter-irc-nick desired))))
+        (progn
+          (clatter--watchdog "RECLAIM-REGAIN %s nick=%s"
+                             (clatter-connection-network-id conn) desired)
+          (clatter-send conn (clatter-irc-privmsg
+                              "NickServ" (format "REGAIN %s" desired))))
+      (clatter-send conn (clatter-irc-nick desired)))))
 
 (provide 'clatter-handlers)
 

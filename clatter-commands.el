@@ -320,12 +320,8 @@ INPUT is the full string including the leading /."
 
 (defun clatter--nickserv-recover (conn verb nick)
   "Send NickServ VERB (\"GHOST\" or \"REGAIN\") for NICK on CONN.
-Includes the network password if one is configured/available."
-  (let* ((network (clatter-connection-network-id conn))
-         (password (clatter-get-password network))
-         (cmd (if password
-                  (format "%s %s %s" verb nick password)
-                (format "%s %s" verb nick))))
+Never sends the configured server/bouncer password to NickServ."
+  (let ((cmd (format "%s %s" verb nick)))
     (clatter-send conn (clatter-irc-privmsg "NickServ" cmd))
     (clatter-insert-system (current-buffer)
                            (format "Sent NickServ %s for %s" verb nick))))

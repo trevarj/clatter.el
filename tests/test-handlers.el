@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'test-helper)
+(require 'clatter-commands)
 
 ;; --- PRIVMSG dispatch ---
 
@@ -433,6 +434,127 @@
       (clatter-test-cleanup))))
 
 ;; --- Nick in use (433) ---
+
+;; --- Bouncer authentication and nick reclaim ---
+
+(defmacro clatter-test--with-live-config (conn config &rest body)
+  "Run BODY with CONN's process configured with CONFIG."
+  (declare (indent 2))
+  `(let ((proc (make-pipe-process :name "clatter-test-live-config" :buffer nil)))
+     (unwind-protect
+         (progn
+           (setf (clatter-connection-process ,conn) proc)
+           (process-put proc :clatter-config ,config)
+           ;; The welcome path records watchdog diagnostics; tests do not
+           ;; need or have permission to write the user state directory.
+           (cl-letf (((symbol-function 'clatter--watchdog)
+                      (lambda (&rest _))))
+             ,@body))
+       (when (process-live-p proc)
+         (delete-process proc)))))
+
+(ert-deftest clatter-test-welcome-bouncer-skips-nickserv-identify ()
+  "A bouncer password is not sent to NickServ after 001."
+  (let ((conn (clatter-test-make-connection "znc" "testnick")))
+    (setf (clatter-connection-sasl-state conn) nil)
+    (unwind-protect
+        (clatter-test--with-live-config
+            conn '(:nick "testnick" :password "bouncer-secret" :bouncer t)
+          (clatter-test-with-mock-send
+            (clatter-dispatch-message
+             conn (clatter-test-parse ":server 001 testnick :Welcome"))
+            (should-not (clatter-test-sent-matching "NickServ"))))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-welcome-identifies-for-non-bouncer-live-config ()
+  "Non-bouncer connections retain automatic IDENTIFY using live config."
+  (let ((conn (clatter-test-make-connection "znc" "testnick")))
+    (setf (clatter-connection-sasl-state conn) nil)
+    (unwind-protect
+        (clatter-test--with-live-config
+            conn '(:nick "testnick" :password "live-secret")
+          (clatter-test-with-mock-send
+            (clatter-dispatch-message
+             conn (clatter-test-parse ":server 001 testnick :Welcome"))
+            (should (clatter-test-sent-matching
+                     "PRIVMSG NickServ :IDENTIFY live-secret"))))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-welcome-auto-identify-can-be-disabled ()
+  "`clatter-auto-identify' suppresses IDENTIFY for direct connections."
+  (let ((conn (clatter-test-make-connection "testnet" "testnick"))
+        (clatter-auto-identify nil))
+    (setf (clatter-connection-sasl-state conn) nil)
+    (unwind-protect
+        (clatter-test--with-live-config
+            conn '(:nick "testnick" :password "server-secret")
+          (clatter-test-with-mock-send
+            (clatter-dispatch-message
+             conn (clatter-test-parse ":server 001 testnick :Welcome"))
+            (should-not (clatter-test-sent-matching "NickServ"))))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-welcome-sasl-still-suppresses-identify ()
+  "SASL success continues to suppress automatic NickServ IDENTIFY."
+  (let ((conn (clatter-test-make-connection "testnet" "testnick")))
+    (unwind-protect
+        (clatter-test--with-live-config
+            conn '(:nick "testnick" :password "server-secret")
+          (clatter-test-with-mock-send
+            (clatter-dispatch-message
+             conn (clatter-test-parse ":server 001 testnick :Welcome"))
+            (should-not (clatter-test-sent-matching "NickServ"))))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-bouncer-disables-automatic-nick-reclaim ()
+  "Bouncer connections never start automatic NICK or REGAIN reclaim."
+  (let ((conn (clatter-test-make-connection "znc" "fallback")))
+    (setf (clatter-connection-desired-nick conn) "wanted"
+          (clatter-connection-sasl-state conn) :done)
+    (unwind-protect
+        (clatter-test--with-live-config conn '(:bouncer t)
+          (clatter-test-with-mock-send
+            (let ((clatter-nick-reclaim-use-regain t))
+              (clatter--maybe-start-nick-reclaim conn)
+              (clatter--reclaim-nick conn "wanted"))
+            (should-not (clatter-connection-nick-reclaim-timer conn))
+            (should-not clatter-test--sent-lines)))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-reconnect-preserves-bouncer-override ()
+  "Reconnect retries with original overrides, including `:bouncer'."
+  (let ((conn (clatter-test-make-connection "znc" "testnick"))
+        scheduled reconnect-args)
+    (setf (clatter-connection-state conn) :disconnected
+          (clatter-connection-config conn)
+          '(:server "znc.example" :nick "testnick" :bouncer t)
+          (clatter-connection-connect-overrides conn) '(:bouncer t))
+    (unwind-protect
+        (cl-letf (((symbol-function 'clatter--watchdog) (lambda (&rest _)))
+                  ((symbol-function 'run-at-time)
+                   (lambda (&rest args)
+                     (setq scheduled (car (last args)))
+                     'clatter-test-timer))
+                  ((symbol-function 'clatter-connect)
+                   (lambda (&rest args) (setq reconnect-args args))))
+          (clatter--schedule-reconnect conn)
+          (funcall scheduled)
+          (should (equal reconnect-args '("znc" :bouncer t))))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-nickserv-recovery-never-sends-network-password ()
+  "Manual GHOST and REGAIN never append a server or bouncer password."
+  (let ((conn (clatter-test-make-connection "znc" "testnick"))
+        (clatter-networks '(("znc" :password "bouncer-secret"))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'clatter-insert-system) (lambda (&rest _))))
+          (clatter-test-with-mock-send
+            (clatter--nickserv-recover conn "GHOST" "wanted")
+            (clatter--nickserv-recover conn "REGAIN" "wanted")
+            (should (equal (nreverse clatter-test--sent-lines)
+                           '("PRIVMSG NickServ :GHOST wanted"
+                             "PRIVMSG NickServ :REGAIN wanted")))))
+      (clatter-test-cleanup))))
 
 (ert-deftest clatter-test-dispatch-nick-in-use ()
   "433 during registration appends underscore to nick and retries."
