@@ -368,6 +368,24 @@ Typing and activity indicators remain in the mode-line for every preset."
                  (const :tag "Full channel context" context))
   :group 'clatter)
 
+(defcustom clatter-read-state-enabled t
+  "Persist local last-read timestamps for Clatter buffers.
+This is a local fallback for bouncers or servers that replay backlog
+without IRCv3 read-marker support."
+  :type 'boolean
+  :group 'clatter)
+
+(defcustom clatter-read-state-file
+  (locate-user-emacs-file "clatter/read-state.el")
+  "File where Clatter persists local read state."
+  :type 'file
+  :group 'clatter)
+
+(defcustom clatter-read-state-save-delay 2
+  "Seconds to debounce writes to `clatter-read-state-file'."
+  :type 'number
+  :group 'clatter)
+
 (defcustom clatter-buffer-max-lines 10000
   "Maximum number of lines to keep in a clatter buffer.
 When exceeded, oldest messages are removed.

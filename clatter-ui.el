@@ -432,7 +432,9 @@ SERVER-TIME overrides the current time for the timestamp."
                           (copy-marker
                            (or clatter--messages-marker (point-max))))))
         (clatter-image--scan-message text buffer img-marker)))
-    (unless (eq buffer (current-buffer))
+    (clatter-note-message-time buffer server-time)
+    (unless (or (eq buffer (current-buffer))
+                (clatter-read-state-message-read-p buffer server-time))
       (clatter-mark-activity buffer is-mention))))
 
 (defun clatter-insert-privmsg (buffer sender text conn &optional server-time invisible)

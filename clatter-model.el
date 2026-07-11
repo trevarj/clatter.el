@@ -57,6 +57,114 @@ Populated by WHOX (extended WHO) replies.")
 (defvar-local clatter--buffer-type nil
   "Buffer type: server, channel, or query.")
 
+;; --- Local read state ---
+
+(defvar-local clatter--last-read-time nil
+  "Newest server-time persisted as read for this buffer.")
+
+(defvar-local clatter--latest-message-time nil
+  "Newest server-time inserted into this buffer.")
+
+(defvar clatter-read-state--table (make-hash-table :test 'equal)
+  "Hash table of persisted local read timestamps keyed by network/target.")
+
+(defvar clatter-read-state--loaded nil
+  "Non-nil once `clatter-read-state-file' has been loaded.")
+
+(defvar clatter-read-state--save-timer nil
+  "Pending debounce timer for saving local read state.")
+
+(defun clatter-read-state--key (network target)
+  "Return the read-state key for NETWORK and TARGET."
+  (cons network (downcase target)))
+
+(defun clatter-read-state--load ()
+  "Load local read state from `clatter-read-state-file' once."
+  (when (and clatter-read-state-enabled
+             (not clatter-read-state--loaded))
+    (setq clatter-read-state--loaded t)
+    (clrhash clatter-read-state--table)
+    (when (file-readable-p clatter-read-state-file)
+      (condition-case err
+          (with-temp-buffer
+            (insert-file-contents clatter-read-state-file)
+            (dolist (entry (read (current-buffer)))
+              (when (and (consp entry) (consp (car entry)))
+                (puthash (car entry) (cdr entry) clatter-read-state--table))))
+        (error
+         (message "[clatter] Could not load read state: %s"
+                  (error-message-string err)))))))
+
+(defun clatter-read-state--alist ()
+  "Return `clatter-read-state--table' as an alist."
+  (let (entries)
+    (maphash (lambda (key value)
+               (push (cons key value) entries))
+             clatter-read-state--table)
+    entries))
+
+(defun clatter-read-state--save-now ()
+  "Write local read state to `clatter-read-state-file'."
+  (when clatter-read-state--save-timer
+    (cancel-timer clatter-read-state--save-timer)
+    (setq clatter-read-state--save-timer nil))
+  (when clatter-read-state-enabled
+    (let ((dir (file-name-directory clatter-read-state-file)))
+      (when dir
+        (make-directory dir t)))
+    (with-temp-file clatter-read-state-file
+      (let ((print-length nil)
+            (print-level nil))
+        (prin1 (clatter-read-state--alist) (current-buffer))))))
+
+(defun clatter-read-state--schedule-save ()
+  "Debounce saving local read state."
+  (when clatter-read-state-enabled
+    (when clatter-read-state--save-timer
+      (cancel-timer clatter-read-state--save-timer))
+    (setq clatter-read-state--save-timer
+          (run-with-timer clatter-read-state-save-delay nil
+                          #'clatter-read-state--save-now))
+    (add-hook 'kill-emacs-hook #'clatter-read-state--save-now)))
+
+(defun clatter-read-state-restore-buffer (buffer)
+  "Restore persisted read state into BUFFER."
+  (when clatter-read-state-enabled
+    (clatter-read-state--load)
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (and clatter--network clatter--target)
+          (setq clatter--last-read-time
+                (gethash (clatter-read-state--key clatter--network clatter--target)
+                         clatter-read-state--table)))))))
+
+(defun clatter-read-state-record-buffer (buffer)
+  "Persist BUFFER's latest message time as read."
+  (when (and clatter-read-state-enabled (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (when (and clatter--network clatter--target clatter--latest-message-time)
+        (let ((key (clatter-read-state--key clatter--network clatter--target)))
+          (setq clatter--last-read-time clatter--latest-message-time)
+          (puthash key clatter--last-read-time clatter-read-state--table)
+          (clatter-read-state--schedule-save))))))
+
+(defun clatter-note-message-time (buffer server-time)
+  "Record SERVER-TIME as the newest message time seen in BUFFER."
+  (when (and server-time (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (when (or (null clatter--latest-message-time)
+                (time-less-p clatter--latest-message-time server-time))
+        (setq clatter--latest-message-time server-time)))))
+
+(defun clatter-read-state-message-read-p (buffer server-time)
+  "Return non-nil if SERVER-TIME is already read in BUFFER."
+  (and clatter-read-state-enabled
+       server-time
+       (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (and clatter--last-read-time
+              (not (time-less-p clatter--last-read-time server-time))))))
+
 ;; --- Buffer registry ---
 
 (defvar clatter--buffer-alist nil
@@ -88,7 +196,8 @@ TYPE is server, channel, or query (auto-detected if nil)."
           (setq clatter--target target)
           (setq clatter--buffer-type buf-type)
           (when (eq buf-type 'channel)
-            (setq clatter--nick-list (make-hash-table :test 'equal))))
+            (setq clatter--nick-list (make-hash-table :test 'equal)))
+          (clatter-read-state-restore-buffer buf))
         ;; Register
         (let ((key (cons network (downcase target))))
           (setf (alist-get key clatter--buffer-alist nil nil #'equal) buf))
@@ -269,7 +378,8 @@ Handles prefixes like @nick, +nick, ~nick."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq clatter--unread-count 0)
-      (setq clatter--has-mention nil))))
+      (setq clatter--has-mention nil))
+    (clatter-read-state-record-buffer buffer)))
 
 ;; --- Major mode (minimal, UI fills in details) ---
 
