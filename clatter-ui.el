@@ -816,20 +816,70 @@ If the input contains multiple lines and exceeds
   '(:eval (clatter--mode-line-string))
   "Mode-line construct for clatter buffers.")
 
+(defun clatter--header-line-string ()
+  "Generate header-line channel context for the current Clatter buffer."
+  (when clatter--network
+    (let* ((target (or clatter--target ""))
+           (base (format "[%s/%s]" clatter--network target))
+           (modes (and clatter--channel-modes
+                       (not (string-empty-p clatter--channel-modes))
+                       clatter--channel-modes))
+           (nicks (clatter-nick-count (current-buffer)))
+           (details (string-join
+                     (delq nil
+                           (list modes
+                                 (when (> nicks 0)
+                                   (format "%d %s" nicks
+                                           (if (= nicks 1) "nick" "nicks")))))
+                     " "))
+           (context (if (string-empty-p details)
+                        base
+                      (format "%s %s" base details))))
+      (if (and clatter--topic (not (string-empty-p clatter--topic)))
+          (format "%s - %s" context clatter--topic)
+        context))))
+
+(defun clatter--header-line-topic-string ()
+  "Generate the topic-only header-line preset for the current buffer.
+Fall back to the network and target when the buffer has no topic."
+  (when clatter--network
+    (if (and clatter--topic (not (string-empty-p clatter--topic)))
+        clatter--topic
+      (format "[%s/%s]" clatter--network (or clatter--target "")))))
+
+(defun clatter--effective-header-line-preset ()
+  "Return the configured header-line preset."
+  clatter-header-line-preset)
+
+(defun clatter--effective-header-line-format ()
+  "Return the header-line construct selected by the preset."
+  (pcase (clatter--effective-header-line-preset)
+    ('topic '(:eval (clatter--header-line-topic-string)))
+    ('context '(:eval (clatter--header-line-string)))
+    (_ nil)))
+
 (defun clatter--mode-line-string ()
   "Generate mode-line string for current clatter buffer."
   (when clatter--network
-    (let* ((conn (clatter-get-connection clatter--network))
+    (let* ((preset (clatter--effective-header-line-preset))
+           (show-identity (not (eq preset 'context)))
+           (show-nicks (not (eq preset 'context)))
+           (conn (clatter-get-connection clatter--network))
            (nick (if conn (clatter-connection-nick conn) "?"))
            (nicks (clatter-nick-count (current-buffer)))
-           (topic-str (if clatter--topic
+           (topic-str (if (and (not (memq preset '(topic context)))
+                               clatter--topic)
                           (truncate-string-to-width clatter--topic 40 nil nil "...")
-                        "")))
-      (format " [%s/%s] %s%s%s"
-              clatter--network
-              (or clatter--target "")
+                        ""))
+           (identity (if show-identity
+                         (format "[%s/%s] "
+                                 clatter--network
+                                 (or clatter--target ""))
+                       "")))
+      (format " %s%s%s%s"
+              identity
               nick
-              (if (> nicks 0) (format " (%d)" nicks) "")
+              (if (and show-nicks (> nicks 0)) (format " (%d)" nicks) "")
               (if (> (length topic-str) 0)
                   (format " - %s" topic-str)
                 "")))))
@@ -856,13 +906,15 @@ If the input contains multiple lines and exceeds
     ;; inside a clatter buffer, not just in the global mode line.
     (setq-local mode-line-format
                 (append
-                 (list " " 'mode-line-buffer-identification
-                       clatter-mode-line-format
+                 (unless (eq (clatter--effective-header-line-preset) 'context)
+                   (list " " 'mode-line-buffer-identification))
+                 (list clatter-mode-line-format
                        '(:eval (clatter--typing-mode-line)))
                  (when (and (boundp 'clatter-track-in-buffer-mode-line)
                             clatter-track-in-buffer-mode-line)
                    (list 'clatter-track-mode-line-item))
                  (list " " 'mode-line-end-spaces)))
+    (setq-local header-line-format (clatter--effective-header-line-format))
     ;; Ensure window margins are synced for timestamp display
     (add-hook 'window-configuration-change-hook
               #'clatter--sync-window-margins nil t)

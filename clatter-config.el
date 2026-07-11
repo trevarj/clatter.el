@@ -354,6 +354,20 @@ The default preserves Clatter's historical `target> ' prompt."
                  (function :tag "Function"))
   :group 'clatter)
 
+(defcustom clatter-header-line-preset nil
+  "Preset that moves channel context into the header line.
+When nil, Clatter leaves the header line disabled and preserves the normal
+mode-line.  `topic' shows the full topic in the header line and removes it
+from the mode-line.  `context' shows the network/target, channel modes,
+member count, and full topic in the header line, leaving only the current
+nick in the mode-line.
+
+Typing and activity indicators remain in the mode-line for every preset."
+  :type '(choice (const :tag "Disabled" nil)
+                 (const :tag "Topic" topic)
+                 (const :tag "Full channel context" context))
+  :group 'clatter)
+
 (defcustom clatter-buffer-max-lines 10000
   "Maximum number of lines to keep in a clatter buffer.
 When exceeded, oldest messages are removed.

@@ -599,6 +599,75 @@
       (should (string-match-p "alice" result))
       (should (string-match-p "msg123" result)))))
 
+;; --- Header-line ---
+
+(ert-deftest clatter-test-header-line-default-disabled ()
+  "Clatter leaves the header line disabled by default."
+  (with-temp-buffer
+    (clatter-mode)
+    (setq-local clatter--network "testnet")
+    (setq-local clatter--target "#emacs")
+    (clatter-ui-setup-buffer (current-buffer))
+    (should-not header-line-format)))
+
+(ert-deftest clatter-test-header-line-renders-channel-context ()
+  "Built-in header-line renderer shows full channel context."
+  (let ((clatter-header-line-preset 'context))
+    (with-temp-buffer
+      (clatter-mode)
+      (setq-local clatter--network "testnet")
+      (setq-local clatter--target "#emacs")
+      (setq-local clatter--topic "A deliberately long topic that is not truncated in the header line")
+      (setq-local clatter--channel-modes "+nt")
+      (setq-local clatter--nick-list (make-hash-table :test 'equal))
+      (puthash "alice" '("" . "alice") clatter--nick-list)
+      (puthash "bob" '("@" . "bob") clatter--nick-list)
+      (clatter-ui-setup-buffer (current-buffer))
+      (should (equal header-line-format
+                     '(:eval (clatter--header-line-string))))
+      (let ((rendered (clatter--header-line-string)))
+        (should (string-match-p "\\[testnet/#emacs\\]" rendered))
+        (should (string-match-p "\\+nt" rendered))
+        (should (string-match-p "2 nicks" rendered))
+        (should (string-match-p "not truncated in the header line" rendered))))))
+
+(ert-deftest clatter-test-header-line-topic-preset-deduplicates-topic ()
+  "The topic preset moves only the topic out of the mode-line."
+  (let ((clatter-header-line-preset 'topic))
+    (with-temp-buffer
+      (clatter-mode)
+      (setq-local clatter--network "testnet")
+      (setq-local clatter--target "#emacs")
+      (setq-local clatter--topic "A full topic")
+      (clatter-ui-setup-buffer (current-buffer))
+      (should (equal header-line-format
+                     '(:eval (clatter--header-line-topic-string))))
+      (should (equal (clatter--header-line-topic-string) "A full topic"))
+      (let ((mode-line (clatter--mode-line-string)))
+        (should (string-match-p "\\[testnet/#emacs\\]" mode-line))
+        (should-not (string-match-p "A full topic" mode-line))))))
+
+(ert-deftest clatter-test-header-line-context-preset-deduplicates-context ()
+  "The context preset leaves only the current nick in the mode-line."
+  (let ((clatter-header-line-preset 'context))
+    (with-temp-buffer
+      (clatter-mode)
+      (setq-local clatter--network "testnet")
+      (setq-local clatter--target "#emacs")
+      (setq-local clatter--topic "A full topic")
+      (setq-local clatter--channel-modes "+nt")
+      (setq-local clatter--nick-list (make-hash-table :test 'equal))
+      (puthash "alice" t clatter--nick-list)
+      (clatter-ui-setup-buffer (current-buffer))
+      (should (equal header-line-format
+                     '(:eval (clatter--header-line-string))))
+      (should-not (memq 'mode-line-buffer-identification mode-line-format))
+      (let ((mode-line (clatter--mode-line-string)))
+        (should (string-match-p "\\?" mode-line))
+        (should-not (string-match-p "testnet/#emacs" mode-line))
+        (should-not (string-match-p "1" mode-line))
+        (should-not (string-match-p "A full topic" mode-line))))))
+
 ;; --- Typing mode-line ---
 
 (ert-deftest clatter-test-typing-mode-line-empty ()
