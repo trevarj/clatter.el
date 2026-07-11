@@ -69,7 +69,15 @@ NETWORK-ID defaults to \"testnet\", NICK to \"testnick\"."
 (defun clatter-test-cleanup ()
   "Clean up after tests."
   (clrhash clatter-connections)
-  (setq clatter-test--sent-lines nil))
+  (setq clatter-test--sent-lines nil)
+  ;; Some UI tests create named Clatter buffers directly rather than through
+  ;; `clatter-test-with-buffer'.  Remove them here so later tests do not see
+  ;; stale activity when collecting global tracker state.
+  (dolist (buf (buffer-list))
+    (when (and (buffer-live-p buf)
+               (string-prefix-p "*clatter:" (buffer-name buf)))
+      (kill-buffer buf)))
+  (setq clatter--buffer-alist nil))
 
 ;; --- Mock Send ---
 
