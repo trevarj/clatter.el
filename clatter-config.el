@@ -120,6 +120,33 @@ See `format-time-string' for format specifiers."
   :type 'string
   :group 'clatter)
 
+(defcustom clatter-display-on-join t
+  "Whether to display a channel buffer when you join it.
+
+The buffer is always created so that activity tracking continues to work.
+Set this to nil to keep autojoined channels from changing the window layout."
+  :type 'boolean
+  :group 'clatter)
+
+(defcustom clatter-display-on-welcome t
+  "Whether to display the server buffer after receiving the welcome message.
+
+The server buffer is always created.  Set this to nil to connect without
+changing the window layout."
+  :type 'boolean
+  :group 'clatter)
+
+(defcustom clatter-receive-query-display 'bury
+  "How to display a buffer for an incoming private message.
+
+`bury' creates the query buffer without displaying it, so activity tracking
+can notify you without disrupting the current window.  `buffer' uses
+`display-buffer', and `pop' uses `pop-to-buffer'."
+  :type '(choice (const :tag "Create without displaying" bury)
+                 (const :tag "Display buffer" buffer)
+                 (const :tag "Pop to buffer" pop))
+  :group 'clatter)
+
 (defcustom clatter-timestamp-side 'right
   "Side of the window where message timestamps are displayed.
 The value `left' uses the left margin, `right' uses the right margin,

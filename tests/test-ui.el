@@ -7,6 +7,110 @@
 (require 'clatter-commands)
 (require 'clatter-nicklist)
 
+;; --- Automatic buffer display ---
+
+(defmacro clatter-test-with-ui-connection (conn &rest body)
+  "Run BODY with CONN and remove its clatter buffers afterwards."
+  (declare (indent 1))
+  `(let ((initial-buffers clatter--buffer-alist)
+         (,conn (clatter-test-make-connection)))
+     (unwind-protect
+         (progn ,@body)
+       (dolist (entry clatter--buffer-alist)
+         (when (and (not (memq entry initial-buffers))
+                    (buffer-live-p (cdr entry)))
+           (kill-buffer (cdr entry))))
+       (setq clatter--buffer-alist initial-buffers)
+       (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-join-display-can-be-disabled ()
+  "Self JOIN still creates its buffer when automatic display is disabled."
+  (let ((clatter-display-on-join nil)
+        (displayed nil))
+    (clatter-test-with-ui-connection conn
+      (clatter-test-with-mock-send
+        (cl-letf (((symbol-function 'display-buffer)
+                   (lambda (&rest _) (setq displayed t))))
+          (clatter-ui--on-join conn '("testnick" "user" "host") "#quiet" nil nil)))
+      (should (clatter-get-buffer "testnet" "#quiet"))
+      (should-not displayed))))
+
+(ert-deftest clatter-test-join-display-defaults-to-enabled ()
+  "Self JOIN uses `display-buffer' by default."
+  (let ((clatter-display-on-join t)
+        (displayed nil))
+    (clatter-test-with-ui-connection conn
+      (clatter-test-with-mock-send
+        (cl-letf (((symbol-function 'display-buffer)
+                   (lambda (buf &rest _) (setq displayed buf))))
+          (clatter-ui--on-join conn '("testnick" "user" "host") "#shown" nil nil)))
+      (should (bufferp displayed)))))
+
+(ert-deftest clatter-test-welcome-display-can-be-disabled ()
+  "Welcome still creates the server buffer when automatic display is disabled."
+  (let ((clatter-display-on-welcome nil)
+        (displayed nil))
+    (clatter-test-with-ui-connection conn
+      (cl-letf (((symbol-function 'display-buffer)
+                 (lambda (&rest _) (setq displayed t))))
+        (clatter-ui--on-welcome conn "testnick"))
+      (should (clatter-get-server-buffer "testnet"))
+      (should-not displayed))))
+
+(ert-deftest clatter-test-welcome-display-defaults-to-enabled ()
+  "Welcome uses `display-buffer' by default."
+  (let ((clatter-display-on-welcome t)
+        (displayed nil))
+    (clatter-test-with-ui-connection conn
+      (cl-letf (((symbol-function 'display-buffer)
+                 (lambda (buf &rest _) (setq displayed buf))))
+        (clatter-ui--on-welcome conn "testnick"))
+      (should (bufferp displayed)))))
+
+(ert-deftest clatter-test-received-query-display-modes ()
+  "Incoming queries are buried, displayed, or popped as configured."
+  (dolist (case '((bury nil nil) (buffer t nil) (pop nil t)))
+    (pcase-let ((`(,mode ,expect-display ,expect-pop) case))
+      (let ((clatter-receive-query-display mode)
+            (displayed nil)
+            (popped nil))
+        (clatter-test-with-ui-connection conn
+          (cl-letf (((symbol-function 'display-buffer)
+                     (lambda (&rest _) (setq displayed t)))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (&rest _) (setq popped t))))
+            (clatter-ui--on-privmsg conn '("alice" "user" "host") "TeStNiCk"
+                                     "hello" nil))
+          (should (clatter-get-buffer "testnet" "alice"))
+          (should (eq displayed expect-display))
+          (should (eq popped expect-pop)))))))
+
+(ert-deftest clatter-test-received-query-ctcp-action-displays-with-mixed-case-target ()
+  "Received CTCP ACTION uses query display policy with a case-folded target."
+  (let ((clatter-receive-query-display 'pop)
+        (popped nil))
+    (clatter-test-with-ui-connection conn
+      (cl-letf (((symbol-function 'pop-to-buffer)
+                 (lambda (buf &rest _) (setq popped buf))))
+        (clatter-dispatch-message
+         conn (clatter-test-parse
+               ":alice!user@host PRIVMSG TeStNiCk :\C-aACTION waves\C-a")))
+      (should (eq popped (clatter-get-buffer "testnet" "alice"))))))
+
+(ert-deftest clatter-test-rfc1459-self-echo-does-not-display-query ()
+  "RFC1459-equivalent self echoes never apply received-query display policy."
+  (let ((clatter-receive-query-display 'pop)
+        (popped nil))
+    (clatter-test-with-ui-connection conn
+      (setf (clatter-connection-nick conn) "{nick")
+      (cl-letf (((symbol-function 'pop-to-buffer)
+                 (lambda (&rest _) (setq popped t))))
+        ;; Under RFC1459 CASEMAPPING, [NICK and {nick are the same nick.
+        (clatter-ui--on-privmsg conn '("[NICK" "user" "host") "{nick"
+                                 "echo" nil))
+      (should (clatter-get-buffer "testnet" "[NICK"))
+      (should-not popped))))
+
 ;; --- Timestamp margins ---
 
 (ert-deftest clatter-test-timestamp-side-left-margin ()
