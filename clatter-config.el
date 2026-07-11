@@ -156,6 +156,28 @@ and nil disables margin timestamps."
                  (const :tag "Disabled" nil))
   :group 'clatter)
 
+(defcustom clatter-self-echo-mode 'server
+  "How messages sent by this client are displayed.
+
+The default `server' waits for the server's echo-message response when that
+capability is available (and preserves the existing immediate fallback when
+it is not).  `optimistic' inserts a tentative local message immediately, then
+reconciles the matching server echo so that server time and msgid metadata are
+retained without displaying a duplicate."
+  :type '(choice (const :tag "Wait for server echo" server)
+                 (const :tag "Show immediately" optimistic))
+  :group 'clatter)
+
+(defcustom clatter-self-echo-timeout 30
+  "Seconds an optimistic self echo may wait for its server echo.
+
+After this interval Clatter keeps the locally displayed message, but no
+longer reconciles a matching incoming message.  This prevents delayed
+playback from a later connection from being mistaken for an echo of an old
+outgoing message."
+  :type 'number
+  :group 'clatter)
+
 (defcustom clatter-fill-column 80
   "Column at which to wrap messages in channel buffers."
   :type 'integer

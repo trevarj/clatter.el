@@ -108,12 +108,9 @@ INPUT is the full string including the leading /."
         (if space-pos
             (let ((target (substring args 0 space-pos))
                   (text (string-trim-left (substring args (1+ space-pos)))))
-              (clatter-send conn (clatter-irc-privmsg target text))
-              ;; Open query buffer and show the message (skip if echo-message handles it)
               (let ((buf (clatter-get-or-create-buffer clatter--network target)))
                 (clatter-ui-setup-buffer-if-needed buf)
-                (unless (member "echo-message" (clatter-connection-cap-enabled conn))
-                  (clatter-insert-privmsg buf (clatter-connection-nick conn) text conn))))
+                (clatter-ui--send-privmsg conn target text 'privmsg buf)))
           (clatter-insert-error (current-buffer) "Usage: /msg target message"))))))
 
 (defun clatter-cmd-me (args)
@@ -122,11 +119,7 @@ INPUT is the full string including the leading /."
     (when conn
       (when (and clatter--target (not (string= clatter--target "*server*")))
         (let ((ctcp-msg (format "\C-aACTION %s\C-a" args)))
-          (clatter-send conn (clatter-irc-privmsg clatter--target ctcp-msg))
-          (unless (member "echo-message" (clatter-connection-cap-enabled conn))
-            (clatter-insert-action (current-buffer)
-                                   (clatter-connection-nick conn)
-                                   args conn)))))))
+          (clatter-ui--send-privmsg conn clatter--target args 'action (current-buffer) ctcp-msg))))))
 
 (defun clatter-cmd-nick (args)
   "Change nick to the NEWNICK given in ARGS."
@@ -680,15 +673,12 @@ Uses +draft/reply tag to thread the response."
      ((null conn)
       (message "Not connected"))
      (t
-      (clatter-send conn (format "@+draft/reply=%s PRIVMSG %s :%s"
-                                 msgid target text))
+      (clatter-ui--send-privmsg conn target text 'privmsg (current-buffer)
+                                 (format "@+draft/reply=%s PRIVMSG %s :%s"
+                                         msgid target text))
       ; Clear secondary selection
       (save-mark-and-excursion (secondary-selection-to-region))
-      ;; Echo if echo-message not enabled
-      (unless (member "echo-message" (clatter-connection-cap-enabled conn))
-        (clatter-insert-privmsg (current-buffer)
-                                (clatter-connection-nick conn)
-                                text conn))))))
+      ))))
 
 (clatter-defcommand "reply" #'clatter-cmd-reply "r")
 

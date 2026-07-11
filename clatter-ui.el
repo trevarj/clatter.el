@@ -129,6 +129,12 @@
 (defvar-local clatter--messages-marker nil
   "Marker for the start of the message area (below the input line).")
 
+(defvar-local clatter--pending-self-echoes nil
+  "Tentative outgoing messages awaiting their server echoes.")
+
+(defvar clatter--self-echo-nonce 0
+  "Monotonically increasing identifier for tentative self echoes.")
+
 (defun clatter--fool-invisibility-p (invisible)
   "Return non-nil if INVISIBLE includes the fool visibility category."
   (or (eq invisible 'clatter-fool)
@@ -335,6 +341,7 @@ SERVER-TIME overrides the current time for the timestamp."
                               (clatter-mention-p (downcase my-nick) (downcase text)))))
          (reply-to (get-text-property 0 'clatter-reply-to text))
          (msgid (get-text-property 0 'clatter-msgid text))
+         (self-echo-nonce (get-text-property 0 'clatter-self-echo-nonce text))
          (reply-context (when reply-to
                           (clatter--find-message-by-msgid buffer reply-to)))
          (hl-text (clatter-hl-format-text text buffer conn))
@@ -398,9 +405,12 @@ SERVER-TIME overrides the current time for the timestamp."
             (concat (or reply-line "") nick-col " " msg-text))))
          (props (list 'clatter-msg-type msg-type
                       'clatter-sender sender
-                      'clatter-text text)))
+                      'clatter-text text
+                      'clatter-server-time server-time)))
     (when msgid
       (setq props (plist-put props 'clatter-msgid msgid)))
+    (when self-echo-nonce
+      (setq props (plist-put props 'clatter-self-echo-nonce self-echo-nonce)))
     (clatter--insert-message buffer formatted nil props server-time invisible)
     (when (and (not clatter--suppress-image-scan)
                (fboundp 'clatter-image--scan-message))
@@ -423,6 +433,128 @@ SERVER-TIME overrides the current time for the timestamp."
 (defun clatter-insert-notice (buffer sender text conn &optional server-time invisible)
   "Insert a NOTICE from SENDER with TEXT into BUFFER."
   (clatter-insert-generic 'notice buffer sender text conn server-time invisible))
+
+(defun clatter-ui--self-echo-p (conn)
+  "Return non-nil when CONN should display a local echo immediately."
+  (or (eq clatter-self-echo-mode 'optimistic)
+      (not (member "echo-message" (clatter-connection-cap-enabled conn)))) )
+
+(defun clatter-ui--record-pending-self-echo (buffer target sender text msg-type nonce)
+  "Record tentative outgoing message metadata for later reconciliation."
+  (with-current-buffer buffer
+    (when-let* ((_start (text-property-any (point-min) (point-max)
+                                           'clatter-self-echo-nonce nonce)))
+      (push (list :nonce nonce :target target :sender sender :text text
+                  :msg-type msg-type :created-at (float-time))
+            clatter--pending-self-echoes))))
+
+(defun clatter-ui--expire-pending-self-echoes (&optional buffer)
+  "Discard expired optimistic self echoes from BUFFER.
+
+Their local lines remain visible, but are no longer candidates for server-echo
+reconciliation.  BUFFER defaults to the current buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (let ((cutoff (- (float-time) clatter-self-echo-timeout)))
+      (dolist (item clatter--pending-self-echoes)
+        (when (<= (plist-get item :created-at) cutoff)
+          (when-let* ((start (text-property-any
+                              (point-min) (point-max) 'clatter-self-echo-nonce
+                              (plist-get item :nonce))))
+            (let ((end (next-single-property-change
+                        start 'clatter-self-echo-nonce nil (point-max))))
+              (with-silent-modifications
+                (remove-text-properties start end '(clatter-self-echo-nonce nil)))))))
+      (setq clatter--pending-self-echoes
+            (cl-remove-if (lambda (item)
+                            (<= (plist-get item :created-at) cutoff))
+                          clatter--pending-self-echoes)))))
+
+(defun clatter-ui--clear-pending-self-echoes (network-id)
+  "Discard optimistic self echoes in all buffers for NETWORK-ID."
+  (dolist (buffer (clatter-all-buffers network-id))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (dolist (item clatter--pending-self-echoes)
+          (when-let* ((start (text-property-any
+                              (point-min) (point-max) 'clatter-self-echo-nonce
+                              (plist-get item :nonce))))
+            (let ((end (next-single-property-change
+                        start 'clatter-self-echo-nonce nil (point-max))))
+              (with-silent-modifications
+                (remove-text-properties start end '(clatter-self-echo-nonce nil))))))
+        (setq clatter--pending-self-echoes nil)))))
+
+(defun clatter-ui--send-privmsg (conn target text &optional msg-type buffer line)
+  "Send TEXT to TARGET and render it according to `clatter-self-echo-mode'.
+MSG-TYPE is `privmsg' or `action'; BUFFER receives the local echo.  LINE, when
+non-nil, is the already formatted IRC command to send."
+  (let* ((msg-type (or msg-type 'privmsg))
+         (buffer (or buffer (current-buffer)))
+         (sender (clatter-connection-nick conn)))
+    (clatter-send conn (or line (clatter-irc-privmsg target text)))
+    (when (clatter-ui--self-echo-p conn)
+      (let* ((nonce (cl-incf clatter--self-echo-nonce))
+             (tentative (propertize (copy-sequence text) 'clatter-self-echo-nonce nonce)))
+        (pcase msg-type
+          ('action (clatter-insert-action buffer sender tentative conn))
+          (_ (clatter-insert-privmsg buffer sender tentative conn)))
+        ;; Only optimistic messages with echo-message negotiated expect a
+        ;; server echo to replace the local line.  Without that capability,
+        ;; retain the established local fallback without a record that could
+        ;; swallow an unrelated later self message.
+        (when (and (eq clatter-self-echo-mode 'optimistic)
+                   (member "echo-message" (clatter-connection-cap-enabled conn)))
+          (clatter-ui--record-pending-self-echo buffer target sender text msg-type nonce))))))
+
+(defun clatter-ui--reconcile-self-echo (buffer sender target text msg-type server-time)
+  "Reconcile a server echo with its tentative local message in BUFFER.
+Matching includes target, sender, message type, and a FIFO pending record, so
+identical messages sent close together each reconcile only one local line."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (clatter-ui--expire-pending-self-echoes)
+      (let ((pending (cl-find-if
+                      (lambda (item)
+                        (and (string-equal-ignore-case sender (plist-get item :sender))
+                             (string-equal-ignore-case target (plist-get item :target))
+                             (eq msg-type (plist-get item :msg-type))
+                             (string= text (plist-get item :text))))
+                      (reverse clatter--pending-self-echoes))))
+        (when pending
+          (let ((start (text-property-any (point-min) (point-max)
+                                          'clatter-self-echo-nonce
+                                          (plist-get pending :nonce))))
+            (when start
+              (let* ((inhibit-read-only t)
+                     (end (next-single-property-change
+                           start 'clatter-self-echo-nonce nil (point-max)))
+                     (msgid (get-text-property 0 'clatter-msgid text)))
+                (remove-text-properties start end '(clatter-self-echo-nonce nil))
+                (add-text-properties start end
+                                     (list 'clatter-server-time server-time
+                                           ;; `clatter-text' is consumed by replies and
+                                           ;; message lookup, so update the stored text as
+                                           ;; well as the visible tentative line.
+                                           'clatter-text text))
+                (when msgid
+                  (put-text-property start end 'clatter-msgid msgid))
+                (when server-time
+                  (dolist (overlay (overlays-at start))
+                    (when (overlay-get overlay 'clatter-timestamp)
+                      (overlay-put overlay 'before-string
+                                   (propertize " " 'display
+                                               `((margin ,(if (eq clatter-timestamp-side 'left)
+                                                              'left-margin
+                                                            'right-margin))
+                                                 ,(propertize
+                                                   (format-time-string clatter-timestamp-format server-time)
+                                                   'face '(clatter-timestamp default))))))))
+                ;; Do not consume a pending record unless its tentative line
+                ;; still exists.  Buffer truncation may have removed it, in
+                ;; which case the caller must insert the server echo normally.
+                (setq clatter--pending-self-echoes
+                      (delq pending clatter--pending-self-echoes))
+                t))))))))
 
 (defun clatter-insert-system (buffer text &optional invisible)
   "Insert a system message TEXT into BUFFER."
@@ -581,12 +713,7 @@ If the input contains multiple lines and exceeds
     (when (and conn target (not (string= target "*server*")))
       (let ((parts (clatter-split-long-message target text)))
         (dolist (part parts)
-          (clatter-send conn (clatter-irc-privmsg target part))
-          ;; Echo our own message if echo-message not enabled
-          (unless (member "echo-message" (clatter-connection-cap-enabled conn))
-            (clatter-insert-privmsg (current-buffer)
-                                    (clatter-connection-nick conn)
-                                    part conn)))))))
+          (clatter-ui--send-privmsg conn target part 'privmsg (current-buffer)))))))
 
 (defun clatter--handle-command (input)
   "Parse and execute INPUT as a /command."
@@ -745,7 +872,9 @@ the buffer margin-width variables."
          (is-muted (clatter-muted-p sender network))
          (invisible (clatter-sender-invisibility sender network)))
     (clatter-ui-setup-buffer-if-needed buf)
-    (clatter-insert-privmsg buf sender-nick text conn server-time invisible)
+    (unless (and (string-equal-ignore-case my-nick sender-nick)
+                 (clatter-ui--reconcile-self-echo buf sender-nick buf-target text 'privmsg server-time))
+      (clatter-insert-privmsg buf sender-nick text conn server-time invisible))
     (when (and (not (clatter-channel-name-p target))
                (clatter-ui--nick-equal-p conn target my-nick)
                (not (clatter-ui--nick-equal-p conn sender-nick my-nick)))
@@ -770,7 +899,9 @@ the buffer margin-width variables."
          (is-muted (clatter-muted-p sender network))
          (invisible (clatter-sender-invisibility sender network)))
     (clatter-ui-setup-buffer-if-needed buf)
-    (clatter-insert-action buf sender-nick text conn server-time invisible)
+    (unless (and (string-equal-ignore-case my-nick sender-nick)
+                 (clatter-ui--reconcile-self-echo buf sender-nick buf-target text 'action server-time))
+      (clatter-insert-action buf sender-nick text conn server-time invisible))
     (when (and (not (clatter-channel-name-p target))
                (clatter-ui--nick-equal-p conn target my-nick)
                (not (clatter-ui--nick-equal-p conn sender-nick my-nick)))
@@ -1110,6 +1241,7 @@ the buffer margin-width variables."
 
 (defun clatter-ui--on-disconnect (network-id event)
   "Handle disconnect EVENT for UI: show message in all NETWORK-ID buffers."
+  (clatter-ui--clear-pending-self-echoes network-id)
   (dolist (buf (clatter-all-buffers network-id))
     (when (buffer-live-p buf)
       (clatter-insert-error buf
