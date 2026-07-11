@@ -248,6 +248,14 @@
               (should-not (text-property-any
                            (point-min) (point-max) 'clatter-self-echo-nonce nonce)))))
       (clatter-test-cleanup))))
+(ert-deftest clatter-tab-navigates-buttons-outside-input ()
+  "TAB moves to a message button when outside the input area."
+  (with-temp-buffer
+    (clatter-mode)
+    (insert "x" (clatter-hl-urls-in-string "https://example.com/a"))
+    (goto-char (point-min))
+    (clatter-tab)
+    (should (button-at (point)))))
 
 ;; --- Timestamp margins ---
 
