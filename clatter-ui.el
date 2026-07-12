@@ -998,28 +998,6 @@ the buffer margin-width variables."
     ('buffer (display-buffer buf))
     ('pop (pop-to-buffer buf))))
 
-(defun clatter-ui--casefold-nick (conn nick)
-  "Return NICK folded according to CONN's CASEMAPPING ISUPPORT token."
-  (let* ((isupport (clatter-connection-isupport conn))
-         (case-mapping (and isupport (gethash "CASEMAPPING" isupport)))
-         (nick (downcase nick)))
-    (pcase case-mapping
-      ("ascii" nick)
-      ("strict-rfc1459"
-       (string-replace "\\\\" "|"
-                       (string-replace "]" "}"
-                                       (string-replace "[" "{" nick))))
-      (_
-       (string-replace "^" "~"
-                       (string-replace "\\\\" "|"
-                                       (string-replace "]" "}"
-                                                       (string-replace "[" "{" nick))))))))
-
-(defun clatter-ui--nick-equal-p (conn first second)
-  "Return non-nil when FIRST and SECOND are equal IRC nicks on CONN."
-  (string-equal (clatter-ui--casefold-nick conn first)
-                (clatter-ui--casefold-nick conn second)))
-
 (defun clatter-ui--on-privmsg (conn sender target text server-time)
   "Display SENDER's PRIVMSG TEXT to TARGET on CONN at SERVER-TIME."
   (let* ((network (clatter-connection-network-id conn))
@@ -1027,7 +1005,7 @@ the buffer margin-width variables."
          (sender-nick (clatter-prefix-nick sender))
          (buf-target (if (clatter-channel-name-p target)
                          target
-                       (if (clatter-ui--nick-equal-p conn target my-nick)
+                       (if (clatter-irc-connection-nick-equal-p conn target my-nick)
                            sender-nick target)))
          (buf (clatter-get-or-create-buffer network buf-target))
          (is-muted (clatter-muted-p sender network))
@@ -1037,8 +1015,8 @@ the buffer margin-width variables."
                  (clatter-ui--reconcile-self-echo buf sender-nick buf-target text 'privmsg server-time))
       (clatter-insert-privmsg buf sender-nick text conn server-time invisible))
     (when (and (not (clatter-channel-name-p target))
-               (clatter-ui--nick-equal-p conn target my-nick)
-               (not (clatter-ui--nick-equal-p conn sender-nick my-nick)))
+               (clatter-irc-connection-nick-equal-p conn target my-nick)
+               (not (clatter-irc-connection-nick-equal-p conn sender-nick my-nick)))
       (clatter-ui--display-received-query buf))
     (when (and (not is-muted)
                (eq 'channel (buffer-local-value 'clatter--buffer-type buf))
@@ -1054,7 +1032,7 @@ the buffer margin-width variables."
          (sender-nick (clatter-prefix-nick sender))
          (buf-target (if (clatter-channel-name-p target)
                          target
-                       (if (clatter-ui--nick-equal-p conn target my-nick)
+                       (if (clatter-irc-connection-nick-equal-p conn target my-nick)
                            sender-nick target)))
          (buf (clatter-get-or-create-buffer network buf-target))
          (is-muted (clatter-muted-p sender network))
@@ -1064,8 +1042,8 @@ the buffer margin-width variables."
                  (clatter-ui--reconcile-self-echo buf sender-nick buf-target text 'action server-time))
       (clatter-insert-action buf sender-nick text conn server-time invisible))
     (when (and (not (clatter-channel-name-p target))
-               (clatter-ui--nick-equal-p conn target my-nick)
-               (not (clatter-ui--nick-equal-p conn sender-nick my-nick)))
+               (clatter-irc-connection-nick-equal-p conn target my-nick)
+               (not (clatter-irc-connection-nick-equal-p conn sender-nick my-nick)))
       (clatter-ui--display-received-query buf))
     (when (and (not is-muted)
                (eq 'channel (buffer-local-value 'clatter--buffer-type buf))

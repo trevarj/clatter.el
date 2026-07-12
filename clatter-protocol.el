@@ -68,6 +68,32 @@ Returns (servername nil nil) if no ! or @ found."
   "Extract nick from parsed PREFIX list."
   (car prefix))
 
+;; --- IRC Case Mapping ---
+
+(defun clatter-casefold-nick (nick &optional case-mapping)
+  "Return NICK folded according to IRC CASE-MAPPING.
+CASE-MAPPING should be the CASEMAPPING ISUPPORT value.  Nil uses
+the RFC1459 mapping, matching IRC's historical default."
+  (let ((nick (downcase nick)))
+    (pcase case-mapping
+      ("ascii" nick)
+      ("strict-rfc1459"
+       (string-replace "\\" "|"
+                       (string-replace "]" "}"
+                                       (string-replace "[" "{" nick))))
+      (_
+       (string-replace "^" "~"
+                       (string-replace "\\" "|"
+                                       (string-replace "]" "}"
+                                                       (string-replace "[" "{" nick))))))))
+
+(defun clatter-nick-equal-p (first second &optional case-mapping)
+  "Return non-nil when FIRST and SECOND are equal IRC nicks.
+CASE-MAPPING should be the CASEMAPPING ISUPPORT value.  Nil uses
+the RFC1459 mapping."
+  (string-equal (clatter-casefold-nick first case-mapping)
+                (clatter-casefold-nick second case-mapping)))
+
 ;; --- Input Sanitization ---
 
 (defun clatter-sanitize-input (text)
