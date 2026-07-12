@@ -243,7 +243,7 @@ Prevents notification spam from rapid messages."
 
 ;; --- Notification logic ---
 
-(defun clatter-notify--should-notify-p (sender target text conn)
+(defun clatter-notify--should-notify-p (sender target text conn &optional server-time)
   "Determine if SENDER's TEXT to TARGET on CONN should notify.
 Returns a symbol indicating the reason: mention, dm, keyword, or nil."
   (when clatter-notify-enabled
@@ -269,6 +269,8 @@ Returns a symbol indicating the reason: mention, dm, keyword, or nil."
            (text-lower (downcase (or text ""))))
       (let ((reason
              (cond
+              ;; Already-read history has already been seen elsewhere.
+              ((and buf (clatter-read-state-message-read-p buf server-time)) nil)
               ;; Own messages (echo-message)
               (is-self nil)
               ;; Muted
@@ -319,9 +321,9 @@ Returns a symbol indicating the reason: mention, dm, keyword, or nil."
 
 ;; --- Hooks ---
 
-(defun clatter-notify--on-privmsg (conn sender target text &rest _args)
+(defun clatter-notify--on-privmsg (conn sender target text &optional server-time)
   "Notify for SENDER's PRIVMSG TEXT to TARGET on CONN."
-  (let ((reason (clatter-notify--should-notify-p sender target text conn)))
+  (let ((reason (clatter-notify--should-notify-p sender target text conn server-time)))
     (when reason
       (let* ((channel-prefixes (let ((isup (clatter-connection-isupport conn)))
                                  (or (and isup (gethash "CHANTYPES" isup))
@@ -334,9 +336,9 @@ Returns a symbol indicating the reason: mention, dm, keyword, or nil."
            (clatter-notify--format-title reason sender-nick target)
            (format "<%s> %s" sender-nick text)))))))
 
-(defun clatter-notify--on-action (conn sender target text &rest _args)
+(defun clatter-notify--on-action (conn sender target text &optional server-time)
   "Notify for SENDER's ACTION TEXT to TARGET on CONN."
-  (let ((reason (clatter-notify--should-notify-p sender target text conn)))
+  (let ((reason (clatter-notify--should-notify-p sender target text conn server-time)))
     (when reason
       (let* ((channel-prefixes (let ((isup (clatter-connection-isupport conn)))
                                  (or (and isup (gethash "CHANTYPES" isup))

@@ -7,6 +7,7 @@
 (require 'clatter-commands)
 (require 'clatter-nicklist)
 (require 'clatter-track)
+(require 'clatter-notify)
 
 ;; --- Automatic buffer display ---
 
@@ -892,6 +893,57 @@
           (setq-local clatter--target "#test")
           (let ((clatter-send-typing t))
             (should (clatter--typing-capable-p))))
+      (clatter-test-cleanup))))
+
+;; --- Notifications and read state ---
+
+(ert-deftest clatter-test-read-state-suppresses-read-notification ()
+  "Messages at or before the last-read timestamp do not notify."
+  (let ((clatter-notify-enabled t)
+        (clatter-notify-on-mention t)
+        (clatter-notify-current-buffer t)
+        (clatter-notify-cooldown 0)
+        (clatter-read-state-enabled t)
+        (clatter--buffer-alist nil)
+        (clatter-notify--last-times (make-hash-table :test 'equal))
+        (sent nil)
+        (conn (clatter-test-make-connection "testnet" "trev"))
+        (last-read (encode-time 0 0 12 1 1 2026 t)))
+    (unwind-protect
+        (let ((buf (clatter-get-or-create-buffer "testnet" "#test")))
+          (with-current-buffer buf
+            (setq-local clatter--last-read-time last-read))
+          (cl-letf (((symbol-function 'clatter-notify--send)
+                     (lambda (title body)
+                       (push (list title body) sent))))
+            (clatter-notify--on-privmsg
+             conn '("alice" nil nil) "#test" "trev: already saw this" last-read)
+            (should-not sent)))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-read-state-allows-unread-notification ()
+  "Messages after the last-read timestamp can still notify."
+  (let ((clatter-notify-enabled t)
+        (clatter-notify-on-mention t)
+        (clatter-notify-current-buffer t)
+        (clatter-notify-cooldown 0)
+        (clatter-read-state-enabled t)
+        (clatter--buffer-alist nil)
+        (clatter-notify--last-times (make-hash-table :test 'equal))
+        (sent nil)
+        (conn (clatter-test-make-connection "testnet" "trev"))
+        (last-read (encode-time 0 0 12 1 1 2026 t))
+        (unread-time (encode-time 1 0 12 1 1 2026 t)))
+    (unwind-protect
+        (let ((buf (clatter-get-or-create-buffer "testnet" "#test")))
+          (with-current-buffer buf
+            (setq-local clatter--last-read-time last-read))
+          (cl-letf (((symbol-function 'clatter-notify--send)
+                     (lambda (title body)
+                       (push (list title body) sent))))
+            (clatter-notify--on-privmsg
+             conn '("alice" nil nil) "#test" "trev: new message" unread-time)
+            (should sent)))
       (clatter-test-cleanup))))
 
 ;; --- Nicklist hooks registered ---
