@@ -64,35 +64,17 @@
 
 (ert-deftest clatter-test-nick-equal-rfc1459 ()
   "RFC1459 CASEMAPPING treats []\\^ as equivalent to {}|~."
-  (let ((conn (clatter-test-make-connection)))
-    (unwind-protect
-        (progn
-          (puthash "CASEMAPPING" "rfc1459"
-                   (clatter-connection-isupport conn))
-          (should (clatter-irc-connection-nick-equal-p conn "Nick[\\^" "nick{|~")))
-      (clatter-test-cleanup))))
+  (should (clatter-nick-equal-p "Nick[\\^" "nick{|~" "rfc1459")))
 
 (ert-deftest clatter-test-nick-equal-strict-rfc1459 ()
   "Strict RFC1459 CASEMAPPING does not fold ^ to ~."
-  (let ((conn (clatter-test-make-connection)))
-    (unwind-protect
-        (progn
-          (puthash "CASEMAPPING" "strict-rfc1459"
-                   (clatter-connection-isupport conn))
-          (should (clatter-irc-connection-nick-equal-p conn "Nick[\\" "nick{|"))
-          (should-not (clatter-irc-connection-nick-equal-p conn "Nick^" "nick~")))
-      (clatter-test-cleanup))))
+  (should (clatter-nick-equal-p "Nick[\\" "nick{|" "strict-rfc1459"))
+  (should-not (clatter-nick-equal-p "Nick^" "nick~" "strict-rfc1459")))
 
 (ert-deftest clatter-test-nick-equal-ascii ()
   "ASCII CASEMAPPING only downcases ASCII letters."
-  (let ((conn (clatter-test-make-connection)))
-    (unwind-protect
-        (progn
-          (puthash "CASEMAPPING" "ascii"
-                   (clatter-connection-isupport conn))
-          (should (clatter-irc-connection-nick-equal-p conn "Nick" "nick"))
-          (should-not (clatter-irc-connection-nick-equal-p conn "Nick[" "nick{")))
-      (clatter-test-cleanup))))
+  (should (clatter-nick-equal-p "Nick" "nick" "ascii"))
+  (should-not (clatter-nick-equal-p "Nick[" "nick{" "ascii")))
 
 ;; --- Tag Parsing ---
 
