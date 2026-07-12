@@ -15,6 +15,7 @@
 
 (require 'cl-lib)
 (require 'clatter-config)
+(require 'clatter-protocol)
 (require 'clatter-connection)
 (require 'clatter-model)
 
@@ -110,33 +111,60 @@ PARAMS format: (target timestamp=TIMESTAMP)"
 
 ;; --- Auto-mark on buffer focus ---
 
-(defun clatter-read-marker--on-buffer-switch ()
-  "Send MARKREAD when switching to a clatter buffer."
+(defun clatter-read-marker--mark-buffer-read (buffer)
+  "Send MARKREAD for BUFFER when it is a readable Clatter target."
   (when (and clatter-read-marker-enabled
              clatter-read-marker-auto-send
-             (derived-mode-p 'clatter-mode)
-             clatter--target
-             clatter--buffer-type
-             (not (eq 'server clatter--buffer-type))
-             clatter--network
-             clatter-read-marker--local-msgid)
-    (let ((conn (clatter-get-connection clatter--network)))
-      (when (and conn (clatter-read-marker--available-p conn))
-        (clatter-read-marker--send conn clatter--target
-                                   clatter-read-marker--local-msgid)
-        ;; Clear the visual marker since everything is now read
-        (when clatter-read-marker--overlay
-          (delete-overlay clatter-read-marker--overlay)
-          (setq clatter-read-marker--overlay nil))))))
+             (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'clatter-mode)
+                 clatter--target
+                 clatter--buffer-type
+                 (not (eq 'server clatter--buffer-type))
+                 clatter--network
+                 clatter-read-marker--local-msgid)
+        (let ((conn (clatter-get-connection clatter--network)))
+          (when (and conn (clatter-read-marker--available-p conn))
+            (clatter-read-marker--send conn clatter--target
+                                       clatter-read-marker--local-msgid)
+            ;; Clear the visual marker since everything is now read.
+            (when clatter-read-marker--overlay
+              (delete-overlay clatter-read-marker--overlay)
+              (setq clatter-read-marker--overlay nil))))))))
+
+(defun clatter-read-marker--on-buffer-switch ()
+  "Send MARKREAD for the current buffer."
+  (clatter-read-marker--mark-buffer-read (current-buffer)))
 
 ;; --- Track msgids ---
 
-(defun clatter-read-marker--track-msgid (_conn _sender _target _text server-time)
+(defun clatter-read-marker--target-buffer (conn sender target)
+  "Return the Clatter buffer for SENDER and TARGET on CONN."
+  (let* ((network (clatter-connection-network-id conn))
+         (sender-nick (clatter-prefix-nick sender))
+         (my-nick (clatter-connection-nick conn))
+         (is-channel (clatter-channel-name-p target))
+         (buffer-target (if is-channel
+                            target
+                          (if (string-equal-ignore-case target my-nick)
+                              sender-nick
+                            target))))
+    (and buffer-target
+         (clatter-get-or-create-buffer network buffer-target
+                                       (if is-channel 'channel 'query)))))
+
+(defun clatter-read-marker--track-msgid (conn sender target _text server-time)
   "Track the latest msgid for read-marker purposes.
 Uses SERVER-TIME as a proxy when msgid tags are not available."
   (when server-time
-    (setq-local clatter-read-marker--local-msgid
-                (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" server-time t))))
+    (let ((buf (clatter-read-marker--target-buffer conn sender target)))
+      (when buf
+        (with-current-buffer buf
+          (setq-local clatter-read-marker--local-msgid
+                      (format-time-string "%Y-%m-%dT%H:%M:%S.000Z"
+                                          server-time t)))
+        (when (eq buf (window-buffer (selected-window)))
+          (clatter-read-marker--mark-buffer-read buf))))))
 
 ;; --- Interactive ---
 
@@ -167,16 +195,17 @@ Uses SERVER-TIME as a proxy when msgid tags are not available."
 
 ;; --- Enable/disable ---
 
-(defun clatter-read-marker--window-change (&rest _)
-  "Send MARKREAD when the selected window's buffer changes.
-Ignores its arguments; suitable for `window-buffer-change-functions'."
-  (clatter-read-marker--on-buffer-switch))
+(defun clatter-read-marker--window-change (window &rest _)
+  "Send MARKREAD when WINDOW's buffer changes.
+Suitable for `window-buffer-change-functions'."
+  (clatter-read-marker--mark-buffer-read (window-buffer window)))
 
 (defun clatter-read-marker-enable ()
   "Enable read-marker hooks."
   (interactive)
   (add-hook 'window-buffer-change-functions #'clatter-read-marker--window-change)
   (add-hook 'clatter-privmsg-hook #'clatter-read-marker--track-msgid)
+  (add-hook 'clatter-action-hook #'clatter-read-marker--track-msgid)
   (when (called-interactively-p 'interactive)
     (message "[clatter-read-marker] Enabled")))
 
@@ -185,6 +214,7 @@ Ignores its arguments; suitable for `window-buffer-change-functions'."
   (interactive)
   (remove-hook 'window-buffer-change-functions #'clatter-read-marker--window-change)
   (remove-hook 'clatter-privmsg-hook #'clatter-read-marker--track-msgid)
+  (remove-hook 'clatter-action-hook #'clatter-read-marker--track-msgid)
   (when (called-interactively-p 'interactive)
     (message "[clatter-read-marker] Disabled")))
 
