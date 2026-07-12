@@ -77,6 +77,36 @@
   (let ((clatter-prompt-format (lambda (_buffer) "prompt> ")))
     (should (clatter--prompt-format-needs-nick-p))))
 
+(ert-deftest clatter-prompt-nick-hides-mode-line-nick ()
+  "Prompts that display the current nick do not repeat it in the mode-line."
+  (let ((clatter-prompt-format "%n> "))
+    (with-temp-buffer
+      (clatter-mode)
+      (setq-local clatter--network "testnet")
+      (setq-local clatter--target "#test")
+      (let ((conn (clatter-test-make-connection "testnet" "alice")))
+        (unwind-protect
+            (progn
+              (clatter--setup-prompt (current-buffer))
+              (should (string-prefix-p "alice> " (buffer-string)))
+              (should-not (string-match-p "alice" (clatter--mode-line-string))))
+          (remhash (clatter-connection-network-id conn) clatter-connections))))))
+
+(ert-deftest clatter-prompt-target-keeps-mode-line-nick ()
+  "Prompts without the current nick keep the nick in the mode-line."
+  (let ((clatter-prompt-format "%t> "))
+    (with-temp-buffer
+      (clatter-mode)
+      (setq-local clatter--network "testnet")
+      (setq-local clatter--target "#test")
+      (let ((conn (clatter-test-make-connection "testnet" "alice")))
+        (unwind-protect
+            (progn
+              (clatter--setup-prompt (current-buffer))
+              (should (string-prefix-p "#test> " (buffer-string)))
+              (should (string-match-p "alice" (clatter--mode-line-string))))
+          (remhash (clatter-connection-network-id conn) clatter-connections))))))
+
 (ert-deftest clatter-prompt-refresh-preserves-pending-input ()
   "Refreshing a nick-based prompt retains typed input and input point."
   (let ((clatter-prompt-format "%n> "))

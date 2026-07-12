@@ -132,6 +132,9 @@
 (defvar-local clatter--messages-marker nil
   "Marker for the start of the message area (below the input line).")
 
+(defvar-local clatter--prompt-shows-nick nil
+  "Non-nil when the current prompt already displays the connection nick.")
+
 (defvar-local clatter--pending-self-echoes nil
   "Tentative outgoing messages awaiting their server echoes.")
 
@@ -617,13 +620,30 @@ When BUFFER is nil, use the current buffer."
            (string-match-p "\\(?:^\\|[^%]\\)\\(?:%%\\)*%n"
                            clatter-prompt-format))))
 
+(defun clatter--prompt-shows-nick-p (prompt &optional buffer)
+  "Return non-nil if PROMPT displays BUFFER's current connection nick."
+  (with-current-buffer (or buffer (current-buffer))
+    (let* ((conn (and clatter--network
+                      (clatter-get-connection clatter--network)))
+           (nick (and conn (clatter-connection-nick conn))))
+      (and (stringp nick)
+           (not (string-empty-p nick))
+           (if (stringp clatter-prompt-format)
+               (string-match-p "\\(?:^\\|[^%]\\)\\(?:%%\\)*%n"
+                               clatter-prompt-format)
+             (string-match-p (regexp-quote nick) prompt))))))
+
 (defun clatter--propertized-prompt (&optional buffer)
   "Return the read-only, propertized prompt for BUFFER."
-  (propertize (clatter--prompt-string buffer)
-              'face 'clatter-prompt
-              'read-only t
-              'front-sticky t
-              'rear-nonsticky t))
+  (let ((prompt (clatter--prompt-string buffer)))
+    (with-current-buffer (or buffer (current-buffer))
+      (setq-local clatter--prompt-shows-nick
+                  (clatter--prompt-shows-nick-p prompt)))
+    (propertize prompt
+                'face 'clatter-prompt
+                'read-only t
+                'front-sticky t
+                'rear-nonsticky t)))
 
 (defun clatter--refresh-prompt ()
   "Refresh the current buffer's prompt without losing pending input."
@@ -868,19 +888,21 @@ Fall back to the network and target when the buffer has no topic."
            (show-nicks (not (eq preset 'context)))
            (conn (clatter-get-connection clatter--network))
            (nick (if conn (clatter-connection-nick conn) "?"))
+           (nick-str (unless clatter--prompt-shows-nick
+                       (format " %s" nick)))
            (nicks (clatter-nick-count (current-buffer)))
            (topic-str (if (and (not (memq preset '(topic context)))
                                clatter--topic)
                           (truncate-string-to-width clatter--topic 40 nil nil "...")
                         ""))
            (identity (if show-identity
-                         (format "[%s/%s] "
+                         (format "[%s/%s]"
                                  clatter--network
                                  (or clatter--target ""))
                        "")))
       (format " %s%s%s%s"
               identity
-              nick
+              (or nick-str "")
               (if (and show-nicks (> nicks 0)) (format " (%d)" nicks) "")
               (if (> (length topic-str) 0)
                   (format " - %s" topic-str)
