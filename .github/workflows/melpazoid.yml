@@ -17,9 +17,32 @@ jobs:
         git clone https://github.com/riscy/melpazoid.git ~/melpazoid
         grep -q 'http://melpa.org/packages/' ~/melpazoid/melpazoid/melpazoid.py
         sed -i 's|http://melpa.org/packages/|https://melpa.org/packages/|' ~/melpazoid/melpazoid/melpazoid.py
+        python - <<'PY'
+        from pathlib import Path
+
+        path = Path.home() / "melpazoid" / "melpazoid" / "melpazoid.py"
+        text = path.read_text()
+        old = """        with urllib.request.urlopen(url, timeout=30) as response:
+                    return str(response.read().decode())"""
+        new = """        request = url
+                if url.startswith('https://api.github.com/') and os.environ.get('GITHUB_TOKEN'):
+                    request = urllib.request.Request(
+                        url,
+                        headers={
+                            'Authorization': f"Bearer {os.environ['GITHUB_TOKEN']}",
+                            'User-Agent': 'clatter.el-ci',
+                        },
+                    )
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return str(response.read().decode())"""
+        if old not in text:
+            raise SystemExit("melpazoid _url_get shape changed")
+        path.write_text(text.replace(old, new))
+        PY
     - name: Run
       env:
         LOCAL_REPO: ${{ github.workspace }}
+        GITHUB_TOKEN: ${{ github.token }}
         # RECIPE is your recipe as written for MELPA:
         RECIPE: (clatter :fetcher github :repo "parenworks/clatter.el")
         # set this to true if warnings should be treated as errors:
