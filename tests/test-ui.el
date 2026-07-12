@@ -420,6 +420,87 @@
           (kill-buffer buffer)))
       (clatter-test-cleanup))))
 
+(ert-deftest clatter-test-smart-noise-hides-first-join-from-non-chatter ()
+  "A nick with no prior channel signal has its first smart-noise event hidden."
+  (let ((clatter-smart-enabled t)
+        (clatter-smart-noise '(join part away))
+        (clatter-suppress-messages '(muted))
+        (clatter--buffer-alist nil)
+        (conn (clatter-test-make-connection)))
+    (unwind-protect
+        (progn
+          (clatter-ui--on-join conn '("lurker" nil nil) "#test" nil nil)
+          (let ((buffer (clatter-get-buffer "testnet" "#test")))
+            (should buffer)
+            (with-current-buffer buffer
+              (goto-char (point-min))
+              (search-forward "lurker has joined")
+              (should (memq 'noise
+                            (ensure-list (get-text-property (match-beginning 0) 'invisible)))))))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-smart-noise-keeps-part-from-active-nick ()
+  "A nick that chatted in a channel keeps its later PART visible."
+  (let ((clatter-smart-enabled t)
+        (clatter-smart-noise '(join part away))
+        (clatter-suppress-messages '(muted))
+        (clatter--buffer-alist nil)
+        (conn (clatter-test-make-connection)))
+    (unwind-protect
+        (progn
+          (clatter-ui--on-privmsg conn '("alice" nil nil) "#test" "hello" nil)
+          (clatter-ui--on-part conn '("alice" nil nil) "#test" "bye")
+          (let ((buffer (clatter-get-buffer "testnet" "#test")))
+            (should buffer)
+            (with-current-buffer buffer
+              (goto-char (point-min))
+              (search-forward "alice has left #test")
+              (should-not (memq 'noise
+                                (ensure-list (get-text-property (match-beginning 0) 'invisible)))))))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-smart-noise-keeps-away-from-active-nick ()
+  "A nick that chatted in a channel keeps its later AWAY visible."
+  (let ((clatter-smart-enabled t)
+        (clatter-smart-noise '(join part away))
+        (clatter-suppress-messages '(muted))
+        (clatter--buffer-alist nil)
+        (conn (clatter-test-make-connection)))
+    (unwind-protect
+        (progn
+          (clatter-ui--on-privmsg conn '("alice" nil nil) "#test" "hello" nil)
+          (let ((buffer (clatter-get-buffer "testnet" "#test")))
+            (should buffer)
+            (with-current-buffer buffer
+              (clatter-nick-add buffer "alice")))
+          (clatter-ui--on-away conn '("alice" nil nil) "away")
+          (let ((buffer (clatter-get-buffer "testnet" "#test")))
+            (with-current-buffer buffer
+              (goto-char (point-min))
+              (search-forward "alice is away: away")
+              (should-not (memq 'noise
+                                (ensure-list (get-text-property (match-beginning 0) 'invisible)))))))
+      (clatter-test-cleanup))))
+
+(ert-deftest clatter-test-smart-noise-keeps-repeated-noise-from-active-nick ()
+  "Once a nick has signal, later noise stays visible regardless of volume."
+  (let ((clatter-smart-noise '(join part quit nick away))
+        (clatter-smart-threshold 0.5))
+    (with-temp-buffer
+      (clatter-smart-put (current-buffer) "alice" 'privmsg)
+      (dotimes (_ 8)
+        (should-not (clatter-smart-eval (current-buffer) "alice" 'away))))))
+
+(ert-deftest clatter-test-smart-noise-preserves-active-state-across-nick-change ()
+  "Nick changes carry active state to the new nick."
+  (let ((clatter-smart-noise '(join part quit nick away))
+        (clatter-smart-threshold 0.5))
+    (with-temp-buffer
+      (clatter-smart-put (current-buffer) "alice" 'privmsg)
+      (should-not (clatter-smart-eval (current-buffer) "alice" "alice_"))
+      (dotimes (_ 8)
+        (should-not (clatter-smart-eval (current-buffer) "alice_" 'part))))))
+
 (ert-deftest clatter-test-fool-message-gets-dim-face ()
   "Messages with the fool invisibility category get `clatter-fool'."
   (with-temp-buffer
